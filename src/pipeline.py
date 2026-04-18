@@ -7,9 +7,8 @@ import pandas as pd
 
 from src.data import load_bars, load_headlines, compute_targets
 from src.sentiment import load_cache
-from src.features import make_features, compute_realized_vol, validate_no_leakage
+from src.features import make_features, validate_no_leakage
 from src.model import train_cv, fit_final, predict
-from src.position import size_positions
 
 ROOT = Path(__file__).resolve().parent.parent
 FEATURES_DIR = ROOT / "features"
@@ -17,12 +16,12 @@ MODELS_DIR = ROOT / "models"
 SUBMISSIONS_DIR = ROOT / "submissions"
 
 
-def _build_X_vol(
+def _build_X(
     split: str,
     sent_cache: pd.DataFrame,
     training_stats: dict | None = None,
-) -> tuple[pd.DataFrame, pd.Series, dict]:
-    """Build (X, vol, fitted_stats) for a given split.
+) -> tuple[pd.DataFrame, dict]:
+    """Build (X, fitted_stats) for a given split.
 
     Fit mode: pass ``training_stats=None`` — ``make_features`` computes any
     cross-session statistics and returns them in ``fitted_stats``.
@@ -32,7 +31,7 @@ def _build_X_vol(
     bars = load_bars(split, seen=True)
     heads = load_headlines(split, seen=True)
 
-    X, feature_names, fitted_stats = make_features(
+    X, _feature_names, fitted_stats = make_features(
         bars, heads, sent_cache, training_stats=training_stats
     )
 
@@ -46,8 +45,7 @@ def _build_X_vol(
         .fillna(0.0)
     )
 
-    vol = compute_realized_vol(bars).reindex(X.index).fillna(0.01)
-    return X, vol, fitted_stats
+    return X, fitted_stats
 
 
 def run_pipeline() -> None:
@@ -59,9 +57,7 @@ def run_pipeline() -> None:
     targets = compute_targets().set_index("session")["target_return"]
 
     # --- Train: fit mode ---------------------------------------------------
-    X_train, vol_train, fitted_stats = _build_X_vol(
-        "train", sent_cache, training_stats=None
-    )
+    X_train, fitted_stats = _build_X("train", sent_cache, training_stats=None)
     y_train = targets.loc[X_train.index]
 
     # Fail fast on leakage / NaN / inf before burning time on training.
@@ -75,7 +71,7 @@ def run_pipeline() -> None:
     if list(X_train.columns) == ["_const"]:
         print("WARNING: only _const feature — model has no real signal yet.")
 
-    boosters, oof, metrics = train_cv(X_train, y_train, vol_train)
+    boosters, oof, metrics = train_cv(X_train, y_train)
     print({k: round(v, 4) for k, v in metrics.items() if isinstance(v, (int, float))})
 
     pd.DataFrame(
@@ -89,9 +85,11 @@ def run_pipeline() -> None:
     booster = fit_final(X_train, y_train)
 
     # --- Test: apply mode using fitted_stats from training -----------------
+    # target_position is the raw model prediction for now. Position sizing
+    # (vol-scaling, clipping, rescaling) will be added back later.
     parts = []
     for split in ("public_test", "private_test"):
-        X_t, vol_t, _ = _build_X_vol(split, sent_cache, training_stats=fitted_stats)
+        X_t, _ = _build_X(split, sent_cache, training_stats=fitted_stats)
         assert set(X_t.columns) == set(X_train.columns), (
             f"Column mismatch on {split}: "
             f"train_only={set(X_train.columns) - set(X_t.columns)}, "
@@ -101,14 +99,13 @@ def run_pipeline() -> None:
         X_t = X_t[list(X_train.columns)]
 
         preds = predict(booster, X_t)
-        pos = size_positions(preds, vol_t.values)
         sub = pd.DataFrame(
-            {"session": X_t.index.astype(int), "target_position": pos}
+            {"session": X_t.index.astype(int), "target_position": preds}
         )
         parts.append(sub)
         print(
             f"split={split}  rows={len(sub)}  "
-            f"mean={pos.mean():.3f} std={pos.std():.3f}"
+            f"mean={preds.mean():.5f} std={preds.std():.5f}"
         )
 
     combined = pd.concat(parts, ignore_index=True)

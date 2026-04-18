@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.features import compute_realized_vol, make_features, validate_no_leakage
+from src.features import make_features, validate_no_leakage
 
 
 def _synth(
@@ -146,19 +146,3 @@ def test_training_stats_roundtrip() -> None:
         bars_seen, headlines_seen, sent, training_stats=sentinel
     )
     assert passed_through == sentinel
-
-
-# --------------------------------------------------------------------------
-# compute_realized_vol
-# --------------------------------------------------------------------------
-
-
-def test_compute_realized_vol_one_sort() -> None:
-    bars_seen, _, _ = _synth()
-    vol = compute_realized_vol(bars_seen)
-
-    assert isinstance(vol, pd.Series)
-    assert vol.index.name == "session"
-    assert len(vol) == bars_seen["session"].nunique()
-    assert vol.isna().sum() == 0
-    assert np.isfinite(vol.to_numpy()).all()

@@ -8,7 +8,6 @@ identifies signals worth turning into features.
 Public surface:
     - make_features(bars_seen, headlines_seen, sentiment_cache, training_stats=None)
       -> (X, feature_names, fitted_stats)
-    - compute_realized_vol(bars_seen) -> pd.Series  (used for position sizing only)
     - validate_no_leakage(X) -> None
 
 Target construction lives in `src.data.compute_targets()` — deliberately *not*
@@ -123,33 +122,6 @@ def make_features(
     # Final invariant: no NaN/inf allowed to leak into the model.
     assert X.isna().sum().sum() == 0, "make_features produced NaN values"
     return X, feature_names, fitted_stats
-
-
-def compute_realized_vol(bars_seen: pd.DataFrame) -> pd.Series:
-    """Per-session std of log-returns over seen bars, indexed by session.
-
-    Used ONLY for position sizing — not a model feature. A single
-    ``sort_values(["session", "bar_ix"])`` is done up front so the diff and
-    groupby operations share the same ordering without repeating the sort.
-    Sessions with missing/insufficient data get filled with 0.01 (a neutral
-    non-zero vol that avoids division-by-zero downstream in position sizing).
-
-    Args:
-        bars_seen: First-half OHLC bars with at least [session, bar_ix, close].
-
-    Returns:
-        pd.Series indexed by session (all unique sessions from ``bars_seen``),
-        values = std of per-bar log-returns. No NaN, strictly finite.
-    """
-    sessions = np.sort(bars_seen["session"].unique())
-    session_index = pd.Index(sessions, name="session")
-
-    ordered = bars_seen.sort_values(["session", "bar_ix"])
-    log_close = np.log(ordered["close"].clip(lower=1e-12))
-    log_ret = log_close.groupby(ordered["session"]).diff()
-    vol = log_ret.groupby(ordered["session"]).std()
-
-    return vol.reindex(session_index).fillna(0.01)
 
 
 def validate_no_leakage(X: pd.DataFrame) -> None:
