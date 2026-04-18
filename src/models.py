@@ -15,6 +15,9 @@ Usage:
 
 import numpy as np
 import pandas as pd
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import Ridge, Lasso, ElasticNet, LogisticRegression
 
 
 # ---------------------------------------------------------------------------
@@ -31,9 +34,7 @@ def train_ridge(X: np.ndarray, y: np.ndarray, alpha: float = 1.0):
     - scripts/run_pipeline.py  (main training)
     - src/evaluate.py          (inside CV loop)
     """
-    # TODO: Create Pipeline([("scaler", StandardScaler()), ("ridge", Ridge(alpha=alpha))])
-    # TODO: Fit and return
-    raise NotImplementedError
+    return Pipeline([("scaler", StandardScaler()), ("ridge", Ridge(alpha=alpha))]).fit(X, y)
 
 
 # ---------------------------------------------------------------------------
@@ -51,11 +52,12 @@ def train_logistic(X: np.ndarray, y: np.ndarray, C: float = 1.0, penalty: str = 
     - scripts/run_pipeline.py
     - src/evaluate.py
     """
-    # TODO: Convert y to binary: y_binary = (y > 0).astype(int)
-    # TODO: Create Pipeline with StandardScaler + LogisticRegression
-    # TODO: Handle solver choice: saga for elasticnet, lbfgs otherwise
-    # TODO: Fit and return
-    raise NotImplementedError
+    y_binary = (y > 0).astype(int)
+    solver = "saga" if penalty in ("l1", "elasticnet") else "lbfgs"
+    return Pipeline([
+        ("scaler", StandardScaler()),
+        ("logistic", LogisticRegression(C=C, penalty=penalty, solver=solver, max_iter=5000)),
+    ]).fit(X, y_binary)
 
 
 # ---------------------------------------------------------------------------
@@ -64,14 +66,18 @@ def train_logistic(X: np.ndarray, y: np.ndarray, C: float = 1.0, penalty: str = 
 
 def train_lasso(X: np.ndarray, y: np.ndarray, alpha: float = 1.0):
     """Train Lasso (L1) — useful for automatic feature selection."""
-    # TODO: Pipeline with StandardScaler + Lasso(alpha, max_iter=5000)
-    raise NotImplementedError
+    return Pipeline([
+        ("scaler", StandardScaler()),
+        ("lasso", Lasso(alpha=alpha, max_iter=5000)),
+    ]).fit(X, y)
 
 
 def train_elasticnet(X: np.ndarray, y: np.ndarray, alpha: float = 1.0, l1_ratio: float = 0.5):
     """Train ElasticNet (blended L1+L2)."""
-    # TODO: Pipeline with StandardScaler + ElasticNet
-    raise NotImplementedError
+    return Pipeline([
+        ("scaler", StandardScaler()),
+        ("elasticnet", ElasticNet(alpha=alpha, l1_ratio=l1_ratio, max_iter=5000)),
+    ]).fit(X, y)
 
 
 # ---------------------------------------------------------------------------
@@ -89,18 +95,55 @@ def train_lightgbm(X: np.ndarray, y: np.ndarray, params: dict | None = None):
     WARNING: Overfits with 1K sessions. Only use if heavily regularized AND
     it still beats Ridge in 20-seed stability test.
     """
-    # TODO: Import lightgbm (guard with try/except ImportError)
-    # TODO: Merge user params over conservative defaults
-    # TODO: Pipeline with StandardScaler + LGBMRegressor
-    raise NotImplementedError
+    try:
+        from lightgbm import LGBMRegressor
+    except ImportError:
+        raise ImportError("lightgbm is required for train_lightgbm. Install with: pip install lightgbm")
+
+    defaults = dict(
+        n_estimators=50,
+        max_depth=3,
+        min_child_samples=30,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        reg_alpha=1.0,
+        reg_lambda=1.0,
+        verbose=-1,
+    )
+    if params is not None:
+        defaults.update(params)
+
+    return Pipeline([
+        ("scaler", StandardScaler()),
+        ("lgbm", LGBMRegressor(**defaults)),
+    ]).fit(X, y)
 
 
 def train_xgboost(X: np.ndarray, y: np.ndarray, params: dict | None = None):
     """Train XGBoost regressor. Same cautions as LightGBM."""
-    # TODO: Import xgboost (guard with try/except ImportError)
-    # TODO: Merge user params over conservative defaults
-    # TODO: Pipeline with StandardScaler + XGBRegressor
-    raise NotImplementedError
+    try:
+        from xgboost import XGBRegressor
+    except ImportError:
+        raise ImportError("xgboost is required for train_xgboost. Install with: pip install xgboost")
+
+    defaults = dict(
+        n_estimators=50,
+        max_depth=3,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        reg_alpha=1.0,
+        reg_lambda=1.0,
+        verbosity=0,
+    )
+    if params is not None:
+        defaults.update(params)
+
+    return Pipeline([
+        ("scaler", StandardScaler()),
+        ("xgb", XGBRegressor(**defaults)),
+    ]).fit(X, y)
 
 
 # ---------------------------------------------------------------------------
@@ -120,13 +163,17 @@ class EnsembleModel:
     """
 
     def __init__(self, models: list, weights: list[float] | None = None):
-        # TODO: Store models and normalize weights (default = equal)
-        raise NotImplementedError
+        self.models = models
+        if weights is None:
+            weights = [1.0 / len(models)] * len(models)
+        else:
+            total = sum(weights)
+            weights = [w / total for w in weights]
+        self.weights = np.array(weights)
 
     def predict(self, X: np.ndarray) -> np.ndarray:
-        # TODO: For each model, get sign(model.predict(X))
-        # TODO: Return weighted average across models
-        raise NotImplementedError
+        sign_preds = np.array([np.sign(model.predict(X)) for model in self.models])
+        return np.dot(self.weights, sign_preds)
 
 
 def train_ensemble(
@@ -139,10 +186,10 @@ def train_ensemble(
 
     Default model_fns: [train_ridge, train_logistic].
     """
-    # TODO: Default to [train_ridge, train_logistic] if model_fns is None
-    # TODO: Fit each model_fn(X, y)
-    # TODO: Return EnsembleModel(fitted_models, weights)
-    raise NotImplementedError
+    if model_fns is None:
+        model_fns = [train_ridge, train_logistic]
+    fitted_models = [fn(X, y) for fn in model_fns]
+    return EnsembleModel(fitted_models, weights)
 
 
 # ---------------------------------------------------------------------------
@@ -170,13 +217,33 @@ def apply_position_sizing(
     - src/evaluate.py          (inside CV to compute Sharpe)
     - src/submit.py            (test predictions → positions)
     """
-    # TODO: Implement each strategy branch
-    # TODO: "sign" → np.sign(predictions)
-    # TODO: "asymmetric" → +1 if pred>0 else -short_scale
-    # TODO: "logistic" → 2 * probabilities - 1
-    # TODO: "clipped" → np.clip(predictions * scale, -max_pos, max_pos)
-    # TODO: "quantile" → rank predictions, bin into 5 buckets
-    raise NotImplementedError
+    predictions = np.asarray(predictions, dtype=float)
+
+    if strategy == "sign":
+        return np.sign(predictions)
+
+    elif strategy == "asymmetric":
+        short_scale = kwargs.get("short_scale", 0.5)
+        return np.where(predictions > 0, 1.0, -short_scale)
+
+    elif strategy == "clipped":
+        scale = kwargs.get("scale", 1.0)
+        max_pos = kwargs.get("max_pos", 1.0)
+        return np.clip(predictions * scale, -max_pos, max_pos)
+
+    elif strategy == "quantile":
+        bins = np.array([-1.0, -0.5, 0.0, 0.5, 1.0])
+        n = len(predictions)
+        if n == 0:
+            return predictions.copy()
+        ranks = np.argsort(np.argsort(predictions)).astype(float)
+        # Map ranks to 0-4 bin indices (5 equal bins)
+        bin_indices = np.clip((ranks / n * 5).astype(int), 0, 4)
+        return bins[bin_indices]
+
+    else:
+        # Unknown strategy — default to sign
+        return np.sign(predictions)
 
 
 # ---------------------------------------------------------------------------
@@ -194,8 +261,17 @@ def feature_importance(model, feature_names: list[str]) -> pd.Series:
     - scripts/run_pipeline.py  (print after training)
     - notebooks/01_eda.ipynb   (visualization)
     """
-    # TODO: Access the estimator inside the Pipeline via named_steps
-    # TODO: For linear models → np.abs(estimator.coef_)
-    # TODO: For tree models → estimator.feature_importances_
-    # TODO: Return pd.Series sorted descending
-    raise NotImplementedError
+    # Access the last step (the estimator) inside the Pipeline
+    if hasattr(model, 'named_steps'):
+        estimator = model[len(model) - 1]
+    else:
+        estimator = model
+
+    if hasattr(estimator, 'coef_'):
+        importance = np.abs(estimator.coef_).ravel()
+    elif hasattr(estimator, 'feature_importances_'):
+        importance = estimator.feature_importances_
+    else:
+        raise ValueError(f"Cannot extract importance from {type(estimator).__name__}")
+
+    return pd.Series(importance, index=feature_names).sort_values(ascending=False)

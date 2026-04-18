@@ -31,14 +31,23 @@ def _ohlc_features(bars: pd.DataFrame) -> pd.DataFrame:
       - up_ratio           (r=-0.059, p=0.061)  fraction of bars where close > open
       - close_rel_range    (r=-0.055, p=0.083)  (close[49] - session_low) / (session_high - session_low)
     """
-    # TODO: Compute first_half_return = close at bar 49 / close at bar 0 - 1
-    # TODO: Compute ret_from_30 = close at bar 49 / close at bar 30 - 1
-    # TODO: Compute volatility = std of log(close/open) per session
-    # TODO: Compute avg_hl_range = mean of (high - low) / open per session
-    # TODO: Compute up_ratio = fraction of bars where close > open per session
-    # TODO: Compute close_rel_range = (close[49] - session_low) / (session_high - session_low)
-    # TODO: Return DataFrame indexed by session
-    raise NotImplementedError
+    first = bars.groupby("session").first()
+    last = bars.groupby("session").last()
+    feat = pd.DataFrame(index=first.index)
+    feat["first_half_return"] = last["close"] / first["close"] - 1
+    bar30 = bars[bars["bar_ix"] == 30].set_index("session")["close"]
+    bar49 = bars[bars["bar_ix"] == 49].set_index("session")["close"]
+    feat["ret_from_30"] = (bar49 / bar30 - 1).reindex(feat.index)
+    log_ret = np.log(bars["close"] / bars["open"])
+    feat["volatility"] = log_ret.groupby(bars["session"]).std()
+    hl_range = (bars["high"] - bars["low"]) / bars["open"]
+    feat["avg_hl_range"] = hl_range.groupby(bars["session"]).mean()
+    is_up = (bars["close"] > bars["open"]).astype(int)
+    feat["up_ratio"] = is_up.groupby(bars["session"]).mean()
+    session_high = bars.groupby("session")["high"].max()
+    session_low = bars.groupby("session")["low"].min()
+    feat["close_rel_range"] = (bar49 - session_low) / (session_high - session_low)
+    return feat
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +84,7 @@ def _ohlc_features_tier2(bars: pd.DataFrame) -> pd.DataFrame:
 REVENUE_KEYWORDS = ["revenue", "quarterly", "earnings", "estimates"]
 POSITIVE_KEYWORDS = ["breakthrough", "surge", "record", "strong demand", "raises outlook"]
 NEGATIVE_KEYWORDS = ["misses", "decline", "withdraws", "warns", "disruptions",
-                      "downgrades", "recall", "loses"]
+                     "downgrades", "recall", "loses"]
 CONTRACT_KEYWORDS = ["secures", "contract"]
 EXPANSION_KEYWORDS = ["expands operations", "opens new", "new office"]
 
@@ -95,12 +104,25 @@ def _headline_features(headlines: pd.DataFrame) -> pd.DataFrame:
     NOTE: Simple keyword sentiment (seen-only) has r=0.018, p=0.57 — DEAD.
     Only event-type counts carry marginal signal.
     """
-    # TODO: Lowercase all headline text
-    # TODO: For each headline, flag whether it matches each keyword list
-    # TODO: Aggregate counts per session using groupby("session").sum()
-    # TODO: Compute net_event_sentiment as combination score
-    # TODO: Return DataFrame indexed by session
-    raise NotImplementedError
+    h = headlines.copy()
+    h["text"] = h["headline"].str.lower()
+    h["revenue_event"] = h["text"].apply(lambda t: any(k in t for k in REVENUE_KEYWORDS)).astype(int)
+    h["positive_event"] = h["text"].apply(lambda t: any(k in t for k in POSITIVE_KEYWORDS)).astype(int)
+    h["negative_event"] = h["text"].apply(lambda t: any(k in t for k in NEGATIVE_KEYWORDS)).astype(int)
+    h["contract_event"] = h["text"].apply(lambda t: any(k in t for k in CONTRACT_KEYWORDS)).astype(int)
+    h["expansion_event"] = h["text"].apply(lambda t: any(k in t for k in EXPANSION_KEYWORDS)).astype(int)
+    agg = h.groupby("session").agg(
+        revenue_event_count=("revenue_event", "sum"),
+        positive_event_count=("positive_event", "sum"),
+        negative_event_count=("negative_event", "sum"),
+        contract_event_count=("contract_event", "sum"),
+        expansion_event_count=("expansion_event", "sum"),
+        headline_count=("text", "count"),
+    )
+    agg["net_event_sentiment"] = (
+        agg["positive_event_count"] + agg["expansion_event_count"] + agg["contract_event_count"]
+    ) - (agg["negative_event_count"] + agg["revenue_event_count"])
+    return agg
 
 
 # ---------------------------------------------------------------------------
@@ -108,10 +130,10 @@ def _headline_features(headlines: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def build_features(
-    bars: pd.DataFrame,
-    headlines: pd.DataFrame | None = None,
-    *,
-    include_tier2: bool = False,
+        bars: pd.DataFrame,
+        headlines: pd.DataFrame | None = None,
+        *,
+        include_tier2: bool = False,
 ) -> pd.DataFrame:
     """Build session-level feature matrix from raw data.
 
@@ -137,12 +159,16 @@ def build_features(
     - src/submit.py            (on test data)
     - notebooks/01_eda.ipynb   (for correlation analysis)
     """
-    # TODO: Call _ohlc_features(bars)
-    # TODO: If include_tier2, call _ohlc_features_tier2(bars) and join
-    # TODO: If headlines provided, call _headline_features(headlines) and join
-    # TODO: fillna(0.0), sort by session index
-    # TODO: Return combined DataFrame
-    raise NotImplementedError
+    feat = _ohlc_features(bars)
+    if include_tier2:
+        tier2 = _ohlc_features_tier2(bars)
+        feat = feat.join(tier2)
+    if headlines is not None:
+        hfeat = _headline_features(headlines)
+        feat = feat.join(hfeat)
+    feat = feat.fillna(0.0)
+    feat = feat.sort_index()
+    return feat
 
 
 def get_target(bars_seen: pd.DataFrame, bars_unseen: pd.DataFrame) -> pd.Series:
@@ -158,10 +184,9 @@ def get_target(bars_seen: pd.DataFrame, bars_unseen: pd.DataFrame) -> pd.Series:
     - scripts/run_pipeline.py  (to get training labels)
     - src/evaluate.py          (inside CV to split X/y)
     """
-    # TODO: halfway_close = bars_seen grouped by session, last close (bar 49)
-    # TODO: end_close = bars_unseen grouped by session, last close (bar 99)
-    # TODO: return end_close / halfway_close - 1
-    raise NotImplementedError
+    halfway_close = bars_seen.groupby("session")["close"].last()
+    end_close = bars_unseen.groupby("session")["close"].last()
+    return (end_close / halfway_close - 1).rename("target_return")
 
 
 def get_halfway_close(bars_seen: pd.DataFrame) -> pd.Series:
@@ -174,5 +199,4 @@ def get_halfway_close(bars_seen: pd.DataFrame) -> pd.Series:
     - src/evaluate.py  (Sharpe calculation)
     - src/submit.py    (sanity checks)
     """
-    # TODO: Group by session, take last close value
-    raise NotImplementedError
+    return bars_seen.groupby("session")["close"].last().rename("halfway_close")
