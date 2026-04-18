@@ -15,3 +15,4 @@ filename,timestamp,model,loss,feature_set,feature_count,cv_sharpe,cv_sharpe_std,
 20260418T220710_xgboost_price5+gate1top10_s293.csv,20260418T220710,xgboost,xgboost_l1l2,price5+gate1top10,15,2.929619,0.570306,0.020380,7dc73dc,kenji/main-v2,Phase3B sweep — XGBoost L1+L2 (reg_alpha=1.0)
 20260418T220714_lightgbm_price5+gate1top10_s182.csv,20260418T220714,lightgbm,lightgbm_squared,price5+gate1top10,15,1.819847,0.894596,0.022002,271b2de,kenji/main-v2,Phase3B sweep — LightGBM squared (num_leaves=15)
 20260418T220723_lightgbm_price5+gate1top10_s153.csv,20260418T220723,lightgbm,lightgbm_squared,price5+gate1top10,15,1.532391,0.967871,0.022264,0cb98f5,kenji/main-v2,Phase3B sweep — LightGBM squared (num_leaves=31)
+20260418T220725_sklgbr_price5+gate1top10_s198.csv,20260418T220725,sklgbr,gbr_squared,price5+gate1top10,15,1.981232,0.718012,0.021112,b68855b,kenji/main-v2,"Phase3B sweep — sklearn GradientBoostingRegressor (n_est=200, depth=3)"
