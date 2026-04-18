@@ -1,0 +1,2 @@
+filename,timestamp,model,loss,feature_set,feature_count,cv_sharpe,cv_sharpe_std,cv_rmse,git_sha,branch,notes
+20260418T000000_huber_price5_s280.csv,20260418T000000,huber,huber,price5,5,2.799367,0.394687,0.020322,c63cd2e,kenji/main-v2,retro-migrated from submissions/submission.csv (current price5/huber baseline)
