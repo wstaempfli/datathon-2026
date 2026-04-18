@@ -5,28 +5,22 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import QuantileRegressor
 from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import KFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from xgboost import XGBRegressor
 
 ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = ROOT / "models"
 
-# Phase 3B sweep winner: XGBoost with L1+L2 regularization.
-# CV Sharpe 2.930 ± 0.570 on price5+gate1top10 (15 features).
+# Phase 3A sweep: QuantileRegressor at the median directly targets what Sharpe
+# penalizes — absolute deviation in PnL — rather than squared error. CV Sharpe
+# 2.676 ± 0.572 on price5+gate1top10 (15 features).
 DEFAULT_PARAMS = {
-    "n_estimators": 300,
-    "learning_rate": 0.05,
-    "max_depth": 4,
-    "min_child_weight": 5,
-    "subsample": 0.8,
-    "colsample_bytree": 0.8,
-    "reg_alpha": 1.0,
-    "reg_lambda": 1.0,
-    "tree_method": "hist",
-    "random_state": 42,
+    "quantile": 0.5,
+    "alpha": 0.01,
+    "solver": "highs",
 }
 
 N_SPLITS = 5
@@ -41,12 +35,10 @@ def sharpe(pnl: np.ndarray) -> float:
 
 
 def _make_pipeline(params: dict) -> Pipeline:
-    # Trees don't need scaling, but we keep the StandardScaler step so the
-    # pipeline interface stays uniform with scripts/submit_and_track.py.
     return Pipeline(
         [
             ("scaler", StandardScaler()),
-            ("est", XGBRegressor(**params)),
+            ("est", QuantileRegressor(**params)),
         ]
     )
 
@@ -54,16 +46,15 @@ def _make_pipeline(params: dict) -> Pipeline:
 def _accumulate_importance(
     models: list[Pipeline], feature_names: list[str]
 ) -> dict:
-    """Average XGBoost gain-based importances across CV folds."""
+    """Average |coef| across CV folds as a proxy for feature importance."""
     agg = np.zeros(len(feature_names), dtype=float)
     for m in models:
-        fi = np.asarray(m.named_steps["est"].feature_importances_, dtype=float)
-        if fi.shape[0] != len(feature_names):
-            # Defensive: XGB sometimes returns fewer entries if a feature wasn't split.
+        coef = np.abs(np.asarray(m.named_steps["est"].coef_, dtype=float))
+        if coef.shape[0] != len(feature_names):
             padded = np.zeros(len(feature_names), dtype=float)
-            padded[: fi.shape[0]] = fi
-            fi = padded
-        agg += fi
+            padded[: coef.shape[0]] = coef
+            coef = padded
+        agg += coef
     if models:
         agg /= len(models)
     return {n: float(v) for n, v in zip(feature_names, agg)}
@@ -76,10 +67,10 @@ def train_cv(
     n_splits: int = N_SPLITS,
     seed: int = 42,
 ) -> tuple[list[Pipeline], np.ndarray, dict]:
-    """Cross-validated XGBoost training.
+    """Cross-validated QuantileRegressor (median) training.
 
-    Returns (models, oof_preds, metrics) with per-fold RMSE, per-fold Sharpe on
-    raw predictions used as positions, plus CV aggregates and mean gain
+    Returns (models, oof_preds, metrics) with per-fold RMSE, per-fold Sharpe
+    on raw predictions used as positions, plus CV aggregates and mean |coef|
     feature importance.
     """
     if params is None:
@@ -162,7 +153,7 @@ def fit_final(
     y: pd.Series,
     params: dict | None = None,
 ) -> Pipeline:
-    """Fit on all train; no validation. Saves to models/xgb_final.pkl."""
+    """Fit on all train; no validation. Saves to models/quantile_final.pkl."""
     if params is None:
         params = dict(DEFAULT_PARAMS)
     else:
@@ -174,7 +165,7 @@ def fit_final(
     m.fit(X.values, y.values.astype(float))
 
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(MODELS_DIR / "xgb_final.pkl", "wb") as f:
+    with open(MODELS_DIR / "quantile_final.pkl", "wb") as f:
         pickle.dump(m, f)
     return m
 
