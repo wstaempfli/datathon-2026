@@ -23,8 +23,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import numpy as np
 import pandas as pd
 
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
-def load_data():
+# All parquet files that follow the naming schema:
+#   {bars,headlines}_{seen,unseen}_{train,public_test,private_test}.parquet
+# Unseen splits only exist for train (we don't have future bars/headlines for test).
+_PARQUET_FILES = [
+    "bars_seen_train",
+    "bars_unseen_train",
+    "bars_seen_public_test",
+    "bars_seen_private_test",
+    "headlines_seen_train",
+    "headlines_unseen_train",
+    "headlines_seen_public_test",
+    "headlines_seen_private_test",
+]
+
+
+def load_data() -> dict[str, pd.DataFrame]:
     """Load all parquet files from data/.
 
     Returns
@@ -35,19 +51,22 @@ def load_data():
         headlines_seen_train, headlines_unseen_train,
         headlines_seen_public_test, headlines_seen_private_test
     """
-    # TODO: Load all 8 parquet files from data/
-    # TODO: Return as dict
-    raise NotImplementedError
+    data = {}
+    for name in _PARQUET_FILES:
+        path = DATA_DIR / f"{name}.parquet"
+        data[name] = pd.read_parquet(path)
+        print(f"  Loaded {name}: {data[name].shape}")
+    return data
 
 
 def main():
     # ------------------------------------------------------------------
     # 1. Load data
     # ------------------------------------------------------------------
-    # TODO: data = load_data()
-    # TODO: bars_seen = data["bars_seen_train"]
-    # TODO: bars_unseen = data["bars_unseen_train"]
-    # TODO: headlines_seen = data["headlines_seen_train"]
+    data = load_data()
+    bars_seen = data["bars_seen_train"]
+    bars_unseen = data["bars_unseen_train"]
+    headlines_seen = data["headlines_seen_train"]
 
     # ------------------------------------------------------------------
     # 2. Build features and target
