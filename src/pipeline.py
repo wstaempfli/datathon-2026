@@ -12,7 +12,7 @@ import pandas as pd  # noqa: E402
 
 from src.data import compute_targets, load_bars, load_headlines  # noqa: E402
 from src.features import make_features, validate_no_leakage  # noqa: E402
-from src.model import fit_final, predict, train_cv  # noqa: E402
+from src.model import apply_sizing, fit_final, predict, train_cv, tune_k  # noqa: E402
 
 MODELS_DIR = ROOT / "models"
 SUBMISSIONS_DIR = ROOT / "submissions"
@@ -36,8 +36,15 @@ def run_pipeline() -> None:
     validate_no_leakage(X_train)
     print(f"X_train shape: {X_train.shape}  columns: {list(X_train.columns)}")
 
-    _models, _oof, metrics = train_cv(X_train, y_train)
+    _models, oof, metrics = train_cv(X_train, y_train)
     print({k: round(v, 4) for k, v in metrics.items() if isinstance(v, (int, float))})
+
+    best_k, k_diag = tune_k(oof, y_train.values.astype(float))
+    print("k sweep:")
+    for k_val, sh in sorted(k_diag.items()):
+        marker = "  <-- best" if k_val == best_k else ""
+        print(f"  k={k_val:>7.1f}  sharpe={sh:+.4f}{marker}")
+    print(f"selected k = {best_k}")
 
     booster = fit_final(X_train, y_train)
 
@@ -48,11 +55,17 @@ def run_pipeline() -> None:
             f"Column mismatch on {split}: train={list(X_train.columns)} "
             f"vs test={list(X_t.columns)}"
         )
-        preds = predict(booster, X_t)
+        raw_preds = predict(booster, X_t)
+        positions = apply_sizing(raw_preds, best_k)
         parts.append(pd.DataFrame(
-            {"session": X_t.index.astype(int), "target_position": preds}
+            {"session": X_t.index.astype(int), "target_position": positions}
         ))
-        print(f"split={split}  rows={len(preds)}  mean={preds.mean():.5f} std={preds.std():.5f}")
+        print(
+            f"split={split}  rows={len(positions)}  "
+            f"raw_mean={raw_preds.mean():+.5f} raw_std={raw_preds.std():.5f}  "
+            f"pos_mean={positions.mean():.4f} pos_std={positions.std():.4f}  "
+            f"pos_min={positions.min():.3f} pos_max={positions.max():.3f}"
+        )
 
     out = SUBMISSIONS_DIR / "submission.csv"
     pd.concat(parts, ignore_index=True).to_csv(out, index=False)

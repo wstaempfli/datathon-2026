@@ -42,7 +42,6 @@ FEATURE_NAMES: tuple[str, ...] = (
 # Curated keyword patterns for the bull-minus-bear (BMB) event score. These
 # capture specific event verbs that FinBERT polarity alone underweights.
 _BULL_PATTERNS: tuple[str, ...] = (
-    r"reports record quarterly revenue",
     r"raises outlook",
     r"reports strong demand",
     r"reports \d+% increase in customer acquisition",
@@ -52,6 +51,8 @@ _BULL_PATTERNS: tuple[str, ...] = (
     r"completes strategic acquisition",
     r"announces breakthrough",
     r"expands operations into",
+    r"opens new office in",
+    r"completes planned facility upgrade",
     r"secures \$\d+m contract",
     r"wins industry award",
     r"files for regulatory approval",

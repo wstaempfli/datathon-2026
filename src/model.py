@@ -24,6 +24,13 @@ DEFAULT_PARAMS = {
 
 N_SPLITS = 5
 
+# Position sizing: target_position = clip(1 + k * prediction, CLIP_LO, CLIP_HI).
+# Always-long floor + signal overlay; mirrors the hand-crafted rule's framing so
+# the model captures the +0.35% drift (57% positive sessions) via the 1.0 base.
+CLIP_LO = 0.2
+CLIP_HI = 2.0
+K_GRID: tuple[float, ...] = (0.0, 10.0, 25.0, 50.0, 100.0, 200.0, 300.0, 500.0, 1000.0)
+
 
 def sharpe(pnl: np.ndarray) -> float:
     pnl = np.asarray(pnl, dtype=float)
@@ -31,6 +38,28 @@ def sharpe(pnl: np.ndarray) -> float:
     if s == 0 or not np.isfinite(s):
         return 0.0
     return float(np.mean(pnl) / s * 16.0)
+
+
+def apply_sizing(preds: np.ndarray, k: float) -> np.ndarray:
+    """target_position = clip(1 + k * preds, CLIP_LO, CLIP_HI)."""
+    return np.clip(1.0 + k * np.asarray(preds, dtype=float), CLIP_LO, CLIP_HI)
+
+
+def tune_k(
+    oof: np.ndarray,
+    y: np.ndarray,
+    grid: tuple[float, ...] = K_GRID,
+) -> tuple[float, dict]:
+    """Pick k in `grid` that maximises Sharpe of apply_sizing(oof, k) * y.
+
+    Returns (best_k, diagnostics) where diagnostics = {k: sharpe} for every k.
+    """
+    results: dict[float, float] = {}
+    for k in grid:
+        pos = apply_sizing(oof, k)
+        results[float(k)] = sharpe(pos * np.asarray(y, dtype=float))
+    best = max(results, key=results.get)
+    return best, results
 
 
 def _make_pipeline(params: dict) -> Pipeline:
