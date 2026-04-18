@@ -11,3 +11,4 @@ filename,timestamp,model,loss,feature_set,feature_count,cv_sharpe,cv_sharpe_std,
 20260418T220558_elasticnet_price5+gate1top10_s278.csv,20260418T220558,elasticnet,elasticnet,price5+gate1top10,15,2.783797,0.585747,0.020430,e29f94a,kenji/main-v2,"ElasticNet(alpha=0.01, l1_ratio=0.3, max_iter=10000)"
 20260418T220558_elasticnet_price5+gate1top10_s278.csv,20260418T220558,elasticnet,elasticnet,price5+gate1top10,15,2.783797,0.585747,0.020430,6835824,kenji/main-v2,"ElasticNet(alpha=0.1, l1_ratio=0.7, max_iter=10000)"
 20260418T220559_quantile_price5+gate1top10_s268.csv,20260418T220559,quantile,quantile,price5+gate1top10,15,2.675609,0.571561,0.020411,c490624,kenji/main-v2,"QuantileRegressor(quantile=0.5, alpha=0.01, solver=highs)"
+20260418T220709_xgboost_price5+gate1top10_s180.csv,20260418T220709,xgboost,xgboost_squared,price5+gate1top10,15,1.798994,0.549626,0.021663,ff63ee6,kenji/main-v2,"Phase3B sweep — XGBoost squared-loss (n_est=300, depth=4)"
