@@ -145,3 +145,27 @@ def test_yz_vol_nonneg() -> None:
     bars, headlines, sent = _synth()
     X, _ = make_features(bars, headlines, sentiment_cache=sent)
     assert (X["yz_vol"] >= 0).all()
+
+
+def test_bmb_counts_match_patterns() -> None:
+    bars, _headlines_unused, sent = _synth(n_sessions=3)
+
+    custom_headlines = pd.DataFrame(
+        [
+            # Session 0: balanced (1 bull + 1 bear + 1 neutral) -> bmb = 0.
+            {"session": 0, "bar_ix": 0, "headline": "Acme raises outlook for next quarter"},
+            {"session": 0, "bar_ix": 1, "headline": "Acme faces regulatory review"},
+            {"session": 0, "bar_ix": 2, "headline": "Generic commentary about markets"},
+            # Session 1: two bulls + zero bears -> bmb = 2.
+            {"session": 1, "bar_ix": 0, "headline": "BetaCo wins industry award"},
+            {"session": 1, "bar_ix": 3, "headline": "BetaCo launches next-generation platform"},
+            # Session 2: zero bull + zero bear -> bmb = 0.
+            {"session": 2, "bar_ix": 5, "headline": "Routine filing submitted"},
+        ]
+    )
+
+    X, _ = make_features(bars, custom_headlines, sentiment_cache=sent)
+    assert "bmb" in X.columns
+    assert X.loc[0, "bmb"] == 0.0
+    assert X.loc[1, "bmb"] == 2.0
+    assert X.loc[2, "bmb"] == 0.0

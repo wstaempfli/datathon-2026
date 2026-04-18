@@ -10,6 +10,7 @@ Public surface:
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -35,7 +36,50 @@ FEATURE_NAMES: tuple[str, ...] = (
     "sent_sma10",
     "sent_ema20",
     "sent_wt_decay20",
+    "bmb",
 )
+
+# Curated keyword patterns for the bull-minus-bear (BMB) event score. These
+# capture specific event verbs that FinBERT polarity alone underweights.
+_BULL_PATTERNS: tuple[str, ...] = (
+    r"reports record quarterly revenue",
+    r"raises outlook",
+    r"reports strong demand",
+    r"reports \d+% increase in customer acquisition",
+    r"sees \d+% margin improvement",
+    r"announces \$[\d.]+b share buyback",
+    r"launches next-generation",
+    r"completes strategic acquisition",
+    r"announces breakthrough",
+    r"expands operations into",
+    r"secures \$\d+m contract",
+    r"wins industry award",
+    r"files for regulatory approval",
+    r"announces significant capital expenditure",
+)
+
+_BEAR_PATTERNS: tuple[str, ...] = (
+    r"warns of supply chain disruptions",
+    r"delays product launch",
+    r"misses quarterly revenue estimates",
+    r"sees \d+% drop in new customer orders",
+    r"reports \d+% decline in operating income",
+    r"reports unexpected decline",
+    r"faces regulatory review",
+    r"faces class action",
+    r"explores strategic alternatives",
+    r"loses key contract",
+    r"withdraws from .* market citing unfavorable",
+    r"recalls products",
+    r"reports rising costs pressuring margins",
+    r"steps down unexpectedly",
+    r"sees mixed results",
+    r"addresses investor concerns in open letter",
+    r"revises long-term strategy",
+)
+
+_BULL_RE = re.compile("|".join(_BULL_PATTERNS), re.IGNORECASE)
+_BEAR_RE = re.compile("|".join(_BEAR_PATTERNS), re.IGNORECASE)
 
 # Substrings that would indicate a column leaks unseen/second-half information.
 _LEAK_SUBSTRINGS: tuple[str, ...] = (
@@ -206,6 +250,25 @@ def _sent_wt_decay20(S: np.ndarray) -> np.ndarray:
     return S @ w
 
 
+def _compute_bmb(headlines: pd.DataFrame, sessions: pd.Index) -> pd.Series:
+    """Per-session count of bull-keyword hits minus bear-keyword hits."""
+    text = headlines["headline"].astype(str).str.lower()
+    is_bull = text.str.contains(_BULL_RE, regex=True, na=False).astype(int)
+    is_bear = text.str.contains(_BEAR_RE, regex=True, na=False).astype(int)
+    tally = (
+        pd.DataFrame(
+            {
+                "session": headlines["session"].to_numpy(),
+                "bull": is_bull.to_numpy(),
+                "bear": is_bear.to_numpy(),
+            }
+        )
+        .groupby("session")[["bull", "bear"]]
+        .sum()
+    )
+    return (tally["bull"] - tally["bear"]).reindex(sessions, fill_value=0).astype(float)
+
+
 # ---- public API -----------------------------------------------------------
 
 def make_features(
@@ -263,6 +326,7 @@ def make_features(
             "sent_sma10": S[:, -10:].mean(axis=1),
             "sent_ema20": _sent_ema20(S),
             "sent_wt_decay20": _sent_wt_decay20(S),
+            "bmb": _compute_bmb(headlines, sessions).to_numpy(),
         },
         index=sessions,
     )[list(FEATURE_NAMES)]
