@@ -1,15 +1,19 @@
 """End-to-end training and submission pipeline."""
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
-import pandas as pd
-
-from src.data import compute_targets, load_bars, load_headlines
-from src.features import make_features, validate_no_leakage
-from src.model import fit_final, predict, train_cv
-
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import pandas as pd  # noqa: E402
+
+from src.data import compute_targets, load_bars, load_headlines  # noqa: E402
+from src.features import make_features, validate_no_leakage  # noqa: E402
+from src.model import fit_final, predict, train_cv  # noqa: E402
+
 MODELS_DIR = ROOT / "models"
 SUBMISSIONS_DIR = ROOT / "submissions"
 
@@ -53,3 +57,7 @@ def run_pipeline() -> None:
     out = SUBMISSIONS_DIR / "submission.csv"
     pd.concat(parts, ignore_index=True).to_csv(out, index=False)
     print(f"wrote {out}  rows={sum(len(p) for p in parts)}")
+
+
+if __name__ == "__main__":
+    run_pipeline()
