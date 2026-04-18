@@ -18,7 +18,25 @@ const state = {
   headlinesByBar: new Map(),
   headlines: [],
   bars: [],
+  // Overlay state: key = `${fileName}::${columnName}` → {series, color, perBar, fileName, columnName}.
+  overlays: new Map(),
+  // Persisted set of overlay keys that should be active. Used to restore on nav + SSE reload.
+  activeKeys: new Set(),
+  // Whether we've applied the default-on MA once for this session (first load).
+  defaultsApplied: false,
 };
+
+const PALETTE = ['#f59e0b', '#a855f7', '#22d3ee', '#f472b6', '#84cc16', '#eab308', '#fb7185', '#60a5fa', '#f97316', '#10b981'];
+const colorForKey = (key) => {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) | 0;
+  return PALETTE[Math.abs(h) % PALETTE.length];
+};
+
+// Features whose magnitude roughly matches OHLC price go on the main (right) scale.
+// Others (rsi, vol, returns, sentiment, predictions) get their own left scale.
+const PRICE_LIKE = /^(close|open|high|low|ma_|ema_|sma_|vwap|mid)/i;
+const onPriceScale = (col) => PRICE_LIKE.test(col);
 
 const $split = document.getElementById('split');
 const $sid = document.getElementById('session-id');
@@ -41,6 +59,11 @@ const chart = LightweightCharts.createChart($chart, {
     horzLines: { color: 'rgba(31, 42, 58, 0.6)' },
   },
   rightPriceScale: {
+    borderColor: '#1f2a3a',
+    scaleMargins: { top: 0.1, bottom: 0.1 },
+  },
+  leftPriceScale: {
+    visible: true,
     borderColor: '#1f2a3a',
     scaleMargins: { top: 0.1, bottom: 0.1 },
   },
@@ -198,7 +221,10 @@ chart.subscribeCrosshairMove((param) => {
 // ── state / navigation ──────────────────────────────────────────────
 
 function writeHash() {
-  const h = `#split=${state.split}&session=${state.sessionId}`;
+  const ov = Array.from(state.activeKeys).join(',');
+  const parts = [`split=${state.split}`, `session=${state.sessionId}`];
+  if (ov) parts.push(`ov=${encodeURIComponent(ov)}`);
+  const h = '#' + parts.join('&');
   if (location.hash !== h) history.replaceState(null, '', h);
 }
 
@@ -209,6 +235,11 @@ function readHash() {
   if (p.has('session')) {
     const sid = parseInt(p.get('session'), 10);
     if (!isNaN(sid)) state.sessionId = sid;
+  }
+  if (p.has('ov')) {
+    const raw = decodeURIComponent(p.get('ov'));
+    for (const k of raw.split(',').filter(Boolean)) state.activeKeys.add(k);
+    state.defaultsApplied = true;  // honor what the URL says, don't overwrite with defaults.
   }
 }
 
@@ -237,6 +268,8 @@ async function loadSession() {
   try {
     const d = await fetchJSON(`/api/session/${state.split}/${state.sessionId}`);
     renderChart(d);
+    // Re-draw any active overlays for the new session.
+    await refreshAllOverlays();
   } catch (e) {
     $meta.innerHTML = `<span class="chip neg">error: ${escapeHtml(e.message)}</span>`;
   }
@@ -251,31 +284,129 @@ function gotoOffset(delta) {
   loadSession();
 }
 
-// ── features sidebar (scaffold) ─────────────────────────────────────
+// ── features sidebar + overlays ─────────────────────────────────────
+
+// File-level metadata from /api/features (name → {columns, per_bar, rows}).
+let featureFiles = [];
+const keyOf = (name, col) => `${name}::${col}`;
 
 async function refreshFeatures() {
   try {
-    const features = await fetchJSON('/api/features');
-    if (!features.length) {
-      $featureList.innerHTML = '<div class="empty">Drop CSV or Parquet files into <code>features/</code> to overlay them here. Required columns: <code>session</code>, optionally <code>bar_ix</code>, plus feature columns.</div>';
+    featureFiles = await fetchJSON('/api/features');
+    if (!featureFiles.length) {
+      $featureList.innerHTML = '<div class="empty">Drop CSV or Parquet files into <code>features/</code> to overlay them here. Required columns: <code>session</code>, optionally <code>bar_ix</code>, plus numeric feature columns.</div>';
       return;
     }
-    $featureList.innerHTML = features.map((f) => {
+    // Apply default-on (MA) exactly once, before we render, so checkboxes render checked.
+    if (!state.defaultsApplied) {
+      for (const f of featureFiles) {
+        if (!f.columns) continue;
+        for (const col of f.columns) {
+          if (/^ma_(5|10|20)$/.test(col)) state.activeKeys.add(keyOf(f.name, col));
+        }
+      }
+      state.defaultsApplied = true;
+    }
+    $featureList.innerHTML = featureFiles.map((f) => {
       if (f.error) {
         return `<div class="f-file err"><div class="f-name">${escapeHtml(f.name)}</div><div class="empty">${escapeHtml(f.error)}</div></div>`;
       }
-      const cols = (f.columns || []).map((c) =>
-        `<label><input type="checkbox" disabled /> ${escapeHtml(c)}</label>`
-      ).join('');
+      const cols = (f.columns || []).map((c) => {
+        const k = keyOf(f.name, c);
+        const checked = state.activeKeys.has(k) ? ' checked' : '';
+        const sw = `<span class="swatch" style="background:${colorForKey(k)}"></span>`;
+        return `<label class="f-col">${sw}<input type="checkbox" data-key="${escapeHtml(k)}" data-file="${escapeHtml(f.name)}" data-col="${escapeHtml(c)}" data-perbar="${f.per_bar ? 1 : 0}"${checked} /> ${escapeHtml(c)}</label>`;
+      }).join('');
       return `<div class="f-file">
         <div class="f-name">${escapeHtml(f.name)}</div>
         <div class="muted" style="font-size:10px;color:var(--muted);margin-bottom:4px;">${f.per_bar ? 'per-bar' : 'per-session'} · ${f.rows} rows</div>
-        ${cols || '<div class="empty">no feature columns</div>'}
+        ${cols || '<div class="empty">no numeric feature columns</div>'}
       </div>`;
     }).join('');
+    // Wire listeners for each checkbox.
+    $featureList.querySelectorAll('input[type="checkbox"][data-key]').forEach((cb) => {
+      cb.addEventListener('change', () => onToggleFeature(cb));
+    });
+    // Refresh any currently-active overlays for the loaded session.
+    await refreshAllOverlays();
   } catch (e) {
     $featureList.innerHTML = `<div class="empty">features api error: ${escapeHtml(e.message)}</div>`;
   }
+}
+
+function onToggleFeature(cb) {
+  const k = cb.dataset.key;
+  if (cb.checked) {
+    state.activeKeys.add(k);
+    addOverlay(cb.dataset.file, cb.dataset.col, cb.dataset.perbar === '1');
+  } else {
+    state.activeKeys.delete(k);
+    removeOverlay(k);
+  }
+  writeHash();
+}
+
+async function addOverlay(fileName, colName, perBar) {
+  const key = keyOf(fileName, colName);
+  if (state.overlays.has(key)) removeOverlay(key);  // avoid dupes
+  const color = colorForKey(key);
+  const series = chart.addLineSeries({
+    color,
+    lineWidth: perBar ? 2 : 1,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    crosshairMarkerVisible: false,
+    priceScaleId: onPriceScale(colName) ? 'right' : 'left',
+  });
+  state.overlays.set(key, { series, color, fileName, columnName: colName, perBar });
+  await populateOverlay(key);
+}
+
+function removeOverlay(key) {
+  const o = state.overlays.get(key);
+  if (!o) return;
+  try { chart.removeSeries(o.series); } catch (_) {}
+  state.overlays.delete(key);
+}
+
+async function populateOverlay(key) {
+  const o = state.overlays.get(key);
+  if (!o || state.sessionId === null) return;
+  try {
+    const rows = await fetchJSON(`/api/features/${encodeURIComponent(o.fileName)}/${state.sessionId}`);
+    let data;
+    if (o.perBar) {
+      data = rows
+        .filter((r) => r[o.columnName] !== null && r[o.columnName] !== undefined && !Number.isNaN(+r[o.columnName]))
+        .map((r) => ({ time: barToTime(+r.bar_ix), value: +r[o.columnName] }));
+    } else {
+      // per-session scalar: horizontal line across all bars in the session.
+      const v = rows.length ? +rows[0][o.columnName] : NaN;
+      if (!Number.isFinite(v) || !state.bars.length) { data = []; }
+      else {
+        const b0 = state.bars[0].bar_ix;
+        const b1 = state.bars[state.bars.length - 1].bar_ix;
+        data = [{ time: barToTime(b0), value: v }, { time: barToTime(b1), value: v }];
+      }
+    }
+    o.series.setData(data);
+  } catch (e) {
+    console.warn('overlay fetch failed', key, e);
+    o.series.setData([]);
+  }
+}
+
+async function refreshAllOverlays() {
+  // Add any activeKeys that don't have a series yet (e.g. after nav).
+  for (const k of state.activeKeys) {
+    if (state.overlays.has(k)) continue;
+    const [fileName, colName] = k.split('::');
+    const f = featureFiles.find((x) => x.name === fileName);
+    if (!f || !f.columns || !f.columns.includes(colName)) continue;
+    await addOverlay(fileName, colName, !!f.per_bar);
+  }
+  // Repopulate existing series for the current session.
+  await Promise.all(Array.from(state.overlays.keys()).map(populateOverlay));
 }
 
 // ── wire-up ─────────────────────────────────────────────────────────
@@ -331,10 +462,13 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === '3') { state.split = 'private_test'; $split.value = 'private_test'; state.sessionId = null; loadSessions().then(loadSession); }
 });
 
-// SSE for features live-reload
+// SSE for features live-reload. Preserve active overlay keys across reloads so
+// toggling state survives pipeline reruns. Existing series get removed (their
+// underlying file may have changed) and re-added inside refreshFeatures().
 function connectSSE() {
   const es = new EventSource('/api/events');
   es.addEventListener('reload', () => {
+    for (const k of Array.from(state.overlays.keys())) removeOverlay(k);
     refreshFeatures();
   });
   es.addEventListener('ready', () => {});

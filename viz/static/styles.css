@@ -254,7 +254,22 @@ body {
   color: var(--muted);
   font-size: 11.5px;
   font-family: var(--mono);
-  cursor: not-allowed;
+  cursor: pointer;
+  user-select: none;
+}
+.f-file label:hover { color: var(--text); }
+.f-file label input[type="checkbox"] {
+  accent-color: var(--accent);
+  cursor: pointer;
+  margin: 0;
+}
+.f-file .swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 .f-file.err { border-color: rgba(239, 83, 80, 0.4); }
 .f-file.err .f-name { color: var(--neg); }

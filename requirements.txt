@@ -118,3 +118,6 @@ xgboost==3.2.0
 fastapi
 uvicorn[standard]
 watchfiles
+
+transformers
+torch

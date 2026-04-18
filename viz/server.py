@@ -202,7 +202,8 @@ async def list_features():
                 df = _load_feature_file(p)
                 FEATURES_CACHE[p.name] = df
             key_cols = {"session", "bar_ix"}
-            columns = [c for c in df.columns if c not in key_cols]
+            numeric = df.select_dtypes(include="number").columns
+            columns = [c for c in numeric if c not in key_cols]
             out.append(
                 {
                     "name": p.name,
