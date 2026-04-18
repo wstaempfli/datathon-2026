@@ -1,15 +1,10 @@
-"""Generate (and optionally submit) rule-variant CSVs to Kaggle.
+"""Generate (and optionally submit) the rule_bmbv2 CSV to Kaggle.
 
 Usage:
-    python scripts/submit_rules.py --dry-run    # generate + diagnostics, no submit
-    python scripts/submit_rules.py              # generate + submit each rule
+    python scripts/submit_rules.py --dry-run    # write CSV + diagnostics, no submit
+    python scripts/submit_rules.py              # write CSV + submit once
 
-For each rule we:
-  1. Compute a train-Sharpe diagnostic.
-  2. Generate predictions for public_test and private_test.
-  3. Concat and write submissions/{rule}.csv.
-  4. Print diagnostics.
-  5. Submit via `kaggle competitions submit` unless --dry-run.
+Emits exactly one submission: rule_bmbv2 at K_FH=25, W_BMB=0.15 (public 2.70101).
 """
 from __future__ import annotations
 
@@ -26,31 +21,17 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.data import compute_targets, load_bars, load_headlines  # noqa: E402
-from src.rules import (  # noqa: E402
-    rule_bmbv2,
-    rule_bmbv2_dd,
-    rule_cat,
-    rule_dd,
-    rule_sink,
-)
+from src.rules import rule_bmbv2  # noqa: E402
 
 SUBMISSIONS_DIR = ROOT / "submissions"
 COMPETITION = "hrt-eth-zurich-datathon-2026"
 
 RULES = [
-    ("rule_bmbv2", "BMBv2 (drop null 'record revenue', add 'opens new office' + 'facility upgrade')"),
-    ("rule_dd", "base + -20*max_drawdown_fh (bounce alpha)"),
-    ("rule_bmbv2_dd", "BMBv2 + -20*max_drawdown_fh (stack)"),
-    ("rule_cat", "base with bmb replaced by category split (guidance/contract/regulatory/earnings)"),
-    ("rule_sink", "BMBv2 + 0.15*bmb + -15*mdd + 0.05*(guidance+contract) (kitchen sink)"),
+    ("rule_bmbv2", "rule_bmbv2 K=25 W=0.15 (public 2.70101)"),
 ]
 
 RULE_FNS = {
     "rule_bmbv2": rule_bmbv2,
-    "rule_dd": rule_dd,
-    "rule_bmbv2_dd": rule_bmbv2_dd,
-    "rule_cat": rule_cat,
-    "rule_sink": rule_sink,
 }
 
 
