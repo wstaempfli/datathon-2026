@@ -208,3 +208,11 @@ __marimo__/
 
 #ide
 .idea/
+
+# Project artifacts (regenerable)
+features/*
+!features/.gitkeep
+!features/sentiment_cache.parquet
+models/
+submissions/
+.pytest_cache/

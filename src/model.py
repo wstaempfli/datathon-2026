@@ -4,28 +4,33 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import lightgbm as lgb
+import xgboost as xgb
 from sklearn.model_selection import KFold
 from sklearn.metrics import mean_squared_error
-
-from src.position import size_positions
 
 ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = ROOT / "models"
 
 DEFAULT_PARAMS = {
-    "objective": "regression",
-    "metric": "rmse",
+    "objective": "reg:squarederror",
+    "eval_metric": "rmse",
     "learning_rate": 0.03,
-    "num_leaves": 31,
-    "min_data_in_leaf": 20,
-    "feature_fraction": 0.8,
-    "bagging_fraction": 0.8,
-    "bagging_freq": 5,
-    "lambda_l2": 1.0,
-    "verbosity": -1,
+    "max_depth": 4,
+    "min_child_weight": 5,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "colsample_bylevel": 1.0,
+    "reg_lambda": 1.0,
+    "reg_alpha": 0.0,
+    "gamma": 0.0,
+    "tree_method": "hist",
     "seed": 42,
+    "verbosity": 0,
 }
+
+NUM_BOOST_ROUND = 800
+EARLY_STOPPING_ROUNDS = 50
+N_SPLITS = 5
 
 
 def sharpe(pnl: np.ndarray) -> float:
@@ -36,14 +41,13 @@ def sharpe(pnl: np.ndarray) -> float:
     return float(np.mean(pnl) / s * 16.0)
 
 
-def _accumulate_importance(boosters: list[lgb.Booster], feature_names: list[str]) -> dict:
+def _accumulate_importance(boosters: list[xgb.Booster], feature_names: list[str]) -> dict:
     agg = np.zeros(len(feature_names), dtype=float)
+    idx = {n: i for i, n in enumerate(feature_names)}
     for b in boosters:
-        imp = b.feature_importance(importance_type="gain")
-        # Defensive: LightGBM returns importances in booster feature order.
-        names = b.feature_name()
-        idx = {n: i for i, n in enumerate(feature_names)}
-        for n, v in zip(names, imp):
+        # get_score returns {feature_name: gain}; features with zero splits are absent.
+        score = b.get_score(importance_type="gain")
+        for n, v in score.items():
             if n in idx:
                 agg[idx[n]] += float(v)
     if len(boosters) > 0:
@@ -54,18 +58,16 @@ def _accumulate_importance(boosters: list[lgb.Booster], feature_names: list[str]
 def train_cv(
     X: pd.DataFrame,
     y: pd.Series,
-    vol: pd.Series,
     params: dict | None = None,
-    n_splits: int = 5,
-    num_boost_round: int = 1500,
-    early_stopping: int = 100,
+    n_splits: int = N_SPLITS,
+    num_boost_round: int = NUM_BOOST_ROUND,
+    early_stopping_rounds: int = EARLY_STOPPING_ROUNDS,
     seed: int = 42,
-) -> tuple[list[lgb.Booster], np.ndarray, dict]:
-    """Cross-validated LightGBM training.
+) -> tuple[list[xgb.Booster], np.ndarray, dict]:
+    """Cross-validated XGBoost training.
 
-    Returns (boosters, oof_preds, metrics) where metrics include per-fold RMSE,
-    per-fold Sharpe using raw predictions as positions, and per-fold Sharpe using
-    vol-scaled predictions, plus CV aggregates and a feature_importance_gain dict.
+    Returns (boosters, oof_preds, metrics) with per-fold RMSE, per-fold Sharpe on
+    raw predictions used as positions, plus CV aggregates and feature importance.
     """
     if params is None:
         params = dict(DEFAULT_PARAMS)
@@ -75,64 +77,53 @@ def train_cv(
         params = merged
 
     assert X.index.equals(y.index), "X and y must share the same index"
-    assert X.index.equals(vol.index), "X and vol must share the same index"
 
     feature_names = list(X.columns)
     X_vals = X.values
     y_vals = y.values.astype(float)
-    vol_vals = vol.values.astype(float)
 
+    # sessions are independent synthetic stocks → KFold not TimeSeriesSplit
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
     oof = np.zeros(len(X), dtype=float)
 
-    boosters: list[lgb.Booster] = []
+    boosters: list[xgb.Booster] = []
     per_fold_rmse: list[float] = []
     per_fold_sharpe_raw: list[float] = []
-    per_fold_sharpe_vol: list[float] = []
 
     for fold, (tr_idx, va_idx) in enumerate(kf.split(X_vals)):
-        dtr = lgb.Dataset(X_vals[tr_idx], label=y_vals[tr_idx], feature_name=feature_names)
-        dva = lgb.Dataset(X_vals[va_idx], label=y_vals[va_idx], feature_name=feature_names,
-                          reference=dtr)
+        dtrain = xgb.DMatrix(
+            X_vals[tr_idx], label=y_vals[tr_idx], feature_names=feature_names
+        )
+        dval = xgb.DMatrix(
+            X_vals[va_idx], label=y_vals[va_idx], feature_names=feature_names
+        )
 
-        booster = lgb.train(
+        booster = xgb.train(
             params,
-            dtr,
+            dtrain,
             num_boost_round=num_boost_round,
-            valid_sets=[dva],
-            valid_names=["val"],
-            callbacks=[
-                lgb.early_stopping(early_stopping, verbose=False),
-                lgb.log_evaluation(0),
-            ],
+            evals=[(dval, "val")],
+            early_stopping_rounds=early_stopping_rounds,
+            verbose_eval=False,
         )
         boosters.append(booster)
 
-        preds = booster.predict(X_vals[va_idx], num_iteration=booster.best_iteration or None)
+        best_iter = booster.best_iteration or 0
+        preds = booster.predict(dval, iteration_range=(0, best_iter + 1))
         oof[va_idx] = preds
 
         rmse = float(np.sqrt(mean_squared_error(y_vals[va_idx], preds)))
         # Sharpe(raw): pred used directly as position
-        pnl_raw = preds * y_vals[va_idx]
-        s_raw = sharpe(pnl_raw)
-        # Sharpe(vol-scaled): pos = pred / max(vol, floor), NO clipping here
-        pos_vol = preds / np.maximum(vol_vals[va_idx], 1e-4)
-        pnl_vol = pos_vol * y_vals[va_idx]
-        s_vol = sharpe(pnl_vol)
+        s_raw = sharpe(preds * y_vals[va_idx])
 
         per_fold_rmse.append(rmse)
         per_fold_sharpe_raw.append(s_raw)
-        per_fold_sharpe_vol.append(s_vol)
 
         print(
             f"[fold {fold + 1}/{n_splits}] rmse={rmse:.5f}  "
-            f"sharpe_raw={s_raw:.3f}  sharpe_vol={s_vol:.3f}  "
-            f"best_iter={booster.best_iteration}"
+            f"sharpe_raw={s_raw:.3f}  best_iter={best_iter}"
         )
 
-    # CV Sharpe(vol-scaled) via full OOF through size_positions
-    pos_full = size_positions(oof, vol_vals)
-    cv_sharpe_vol_full = sharpe(pos_full * y_vals)
     cv_rmse = float(np.sqrt(mean_squared_error(y_vals, oof)))
 
     def _mean_std(xs: list[float]) -> tuple[float, float]:
@@ -141,41 +132,32 @@ def train_cv(
 
     rmse_mean, rmse_std = _mean_std(per_fold_rmse)
     sraw_mean, sraw_std = _mean_std(per_fold_sharpe_raw)
-    svol_mean, svol_std = _mean_std(per_fold_sharpe_vol)
 
     fi = _accumulate_importance(boosters, feature_names)
 
     metrics: dict = {
         "per_fold_rmse": per_fold_rmse,
         "per_fold_sharpe_raw": per_fold_sharpe_raw,
-        "per_fold_sharpe_vol": per_fold_sharpe_vol,
         "rmse_mean": rmse_mean,
         "rmse_std": rmse_std,
         "sharpe_raw_mean": sraw_mean,
         "sharpe_raw_std": sraw_std,
-        "sharpe_vol_mean": svol_mean,
-        "sharpe_vol_std": svol_std,
         "cv_rmse": cv_rmse,
         "cv_sharpe_raw": sharpe(oof * y_vals),
-        "cv_sharpe_vol": cv_sharpe_vol_full,
         "feature_importance_gain": fi,
     }
 
     print(
         f"CV: rmse={rmse_mean:.5f}±{rmse_std:.5f}  "
-        f"sharpe_raw={sraw_mean:.3f}±{sraw_std:.3f}  "
-        f"sharpe_vol={svol_mean:.3f}±{svol_std:.3f}  "
-        f"cv_sharpe_vol_full={cv_sharpe_vol_full:.3f}"
+        f"sharpe_raw={sraw_mean:.3f}±{sraw_std:.3f}"
     )
 
     # Instability warning: flag when std exceeds 0.3 * |mean| for any headline metric.
-    def _warn(label: str, mean: float, std: float) -> None:
-        if abs(mean) > 0 and std > 0.3 * abs(mean):
-            print(f"WARNING: high variance — model may be unstable ({label}: "
-                  f"mean={mean:.4f}, std={std:.4f})")
-
-    _warn("rmse", rmse_mean, rmse_std)
-    _warn("sharpe_vol", svol_mean, svol_std)
+    if abs(rmse_mean) > 0 and rmse_std > 0.3 * abs(rmse_mean):
+        print(
+            f"WARNING: high variance — model may be unstable "
+            f"(rmse: mean={rmse_mean:.4f}, std={rmse_std:.4f})"
+        )
 
     return boosters, oof, metrics
 
@@ -184,9 +166,9 @@ def fit_final(
     X: pd.DataFrame,
     y: pd.Series,
     params: dict | None = None,
-    num_boost_round: int = 1000,
-) -> lgb.Booster:
-    """Fit on all train; no validation. Saves to models/lgbm_final.txt."""
+    num_boost_round: int = NUM_BOOST_ROUND,
+) -> xgb.Booster:
+    """Fit on all train; no validation. Saves to models/xgb_final.json."""
     if params is None:
         params = dict(DEFAULT_PARAMS)
     else:
@@ -195,17 +177,28 @@ def fit_final(
         params = merged
 
     feature_names = list(X.columns)
-    dtr = lgb.Dataset(X.values, label=y.values.astype(float), feature_name=feature_names)
-    booster = lgb.train(
+    dtrain = xgb.DMatrix(
+        X.values, label=y.values.astype(float), feature_names=feature_names
+    )
+    booster = xgb.train(
         params,
-        dtr,
+        dtrain,
         num_boost_round=num_boost_round,
-        callbacks=[lgb.log_evaluation(0)],
+        verbose_eval=False,
     )
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    booster.save_model(str(MODELS_DIR / "lgbm_final.txt"))
+    booster.save_model(str(MODELS_DIR / "xgb_final.json"))
     return booster
 
 
-def predict(booster: lgb.Booster, X: pd.DataFrame) -> np.ndarray:
-    return booster.predict(X.values, num_iteration=booster.best_iteration or None)
+def predict(booster: xgb.Booster, X: pd.DataFrame) -> np.ndarray:
+    """Predict with all boosted rounds.
+
+    Intentionally omits `iteration_range` so boosters from `fit_final` (which
+    trains without a validation set, so `best_iteration == 0`) use every tree.
+    The CV fold-level predict inside `train_cv` keeps its own `iteration_range`
+    because it *does* have early stopping.
+    """
+    feature_names = list(X.columns)
+    dmat = xgb.DMatrix(X.values, feature_names=feature_names)
+    return booster.predict(dmat)
