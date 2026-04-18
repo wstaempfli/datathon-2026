@@ -128,6 +128,28 @@ def extract_entities(text: str) -> list[str]:
     return ents
 
 
+_AMOUNT_RE = re.compile(r"\$\s?\d+(?:\.\d+)?\s?[MBKmbk]?")
+_PCT_RE = re.compile(r"\b\d+(?:\.\d+)?\s?%")
+_NUM_RE = re.compile(r"\b\d+\b")
+
+
+def templatize(text: str) -> str:
+    """Collapse a headline to a template so different entities/amounts share one group."""
+    t = _AMOUNT_RE.sub("$#", text)
+    t = _PCT_RE.sub("#%", t)
+    # Multi-word capitalized entities → [CO]. Single-word caps are usually sentence-start and stay.
+    t = CAP_ENTITY_RE.sub(lambda m: "[CO]" if " " in m.group(1) else m.group(1), t)
+    t = _NUM_RE.sub("#", t)
+    return t
+
+
+@st.cache_data(show_spinner=False)
+def templated_headlines(split: str) -> pd.DataFrame:
+    hl = load_headlines(split).copy()
+    hl["template"] = hl["headline"].map(templatize)
+    return hl
+
+
 # ---------- Pages ----------
 
 def page_overview():
@@ -547,6 +569,212 @@ def page_parity():
     st.plotly_chart(f, use_container_width=True)
 
 
+def page_headline_cohort():
+    st.header("Headline cohort")
+    st.caption(
+        "Pick a headline (or template / substring / regex) and see the price paths of every "
+        "session where it appears. Useful for spotting whether a given phrase has predictable "
+        "impact on subsequent returns."
+    )
+
+    col_a, col_b = st.columns([1, 1])
+    with col_a:
+        split = st.selectbox(
+            "Split", ["train", "public_test", "private_test"], key="coh_split",
+            help="Train shows the full session and computes cohort-level return stats.",
+        )
+    with col_b:
+        mode = st.radio(
+            "Match mode", ["Template", "Substring", "Exact", "Regex"], horizontal=True,
+            help="Template collapses numbers and multi-word capitalized entities (usually the most useful default).",
+        )
+
+    # Assemble headline pool
+    if split == "train":
+        include_unseen = st.checkbox(
+            "Include headlines from the unseen second half (train only)", value=True,
+            help="OFF = only headlines visible at test time. ON = late-session news too.",
+        )
+        parts = [templated_headlines("train_seen").assign(half="seen")]
+        if include_unseen:
+            parts.append(templated_headlines("train_unseen").assign(half="unseen"))
+        hl_all = pd.concat(parts, ignore_index=True)
+    else:
+        hl_all = templated_headlines(f"{split}_seen").assign(half="seen")
+
+    # Selector depends on mode
+    if mode == "Template":
+        counts = hl_all.groupby("template").size().sort_values(ascending=False)
+        top = counts.head(50)
+        sel = st.selectbox(
+            f"Pick a template (top 50 of {counts.size:,})",
+            top.index.tolist(),
+            format_func=lambda t: f"[{top[t]}×] {t}",
+        )
+        mask = hl_all["template"] == sel
+        label = f"template: {sel}"
+    elif mode == "Substring":
+        q = st.text_input("Substring (case-insensitive)", "secures $")
+        if not q:
+            st.info("Enter a query above.")
+            return
+        mask = hl_all["headline"].str.contains(q, case=False, regex=False, na=False)
+        label = f"substring: {q!r}"
+    elif mode == "Exact":
+        counts = hl_all.groupby("headline").size().sort_values(ascending=False).head(50)
+        sel = st.selectbox(
+            "Pick an exact headline (top 50)",
+            counts.index.tolist(),
+            format_func=lambda t: f"[{counts[t]}×] {t[:120]}",
+        )
+        mask = hl_all["headline"] == sel
+        label = f"exact: {sel[:80]}"
+    else:
+        q = st.text_input("Regex pattern (case-insensitive)", r"secures \$\d+M")
+        if not q:
+            return
+        try:
+            mask = hl_all["headline"].str.contains(q, case=False, regex=True, na=False)
+        except re.error as e:
+            st.error(f"Invalid regex: {e}")
+            return
+        label = f"regex: /{q}/i"
+
+    matched = hl_all[mask].copy()
+    if matched.empty:
+        st.warning("No matches.")
+        return
+
+    # First occurrence per session defines the event bar
+    first_occ = matched.sort_values(["session", "bar_ix"]).groupby("session", as_index=False).head(1)
+
+    colh = st.columns(4)
+    colh[0].metric("Sessions matched", f"{len(first_occ):,}")
+    colh[1].metric("Total occurrences", f"{len(matched):,}")
+    colh[2].metric("Median event bar", f"{int(first_occ['bar_ix'].median())}")
+    colh[3].metric("Unique headlines", f"{matched['headline'].nunique():,}")
+
+    # Bars for the cohort
+    seen_key = {"train": "train_seen", "public_test": "public_test_seen", "private_test": "private_test_seen"}[split]
+    bars_all = train_full_bars() if split == "train" else load_bars(seen_key)
+    event_bar_by_session = first_occ.set_index("session")["bar_ix"].to_dict()
+
+    cohort = bars_all[bars_all["session"].isin(event_bar_by_session)].copy()
+    cohort["event_bar"] = cohort["session"].map(event_bar_by_session)
+
+    align_relative = st.radio(
+        "Alignment", ["Relative to event bar", "Absolute bar_ix"], horizontal=True, key="coh_align",
+    ) == "Relative to event bar"
+    rebase = st.checkbox("Rebase close = 1.0 at event bar", value=True, key="coh_rebase")
+
+    cohort["x"] = cohort["bar_ix"] - cohort["event_bar"] if align_relative else cohort["bar_ix"]
+    if rebase:
+        event_close = (
+            cohort[cohort["bar_ix"] == cohort["event_bar"]].set_index("session")["close"]
+        )
+        cohort = cohort[cohort["session"].isin(event_close.index)]
+        cohort["close_plot"] = cohort["close"] / cohort["session"].map(event_close)
+    else:
+        cohort["close_plot"] = cohort["close"]
+
+    # Sampled overlay as one scattergl trace with None separators
+    rng = np.random.default_rng(0)
+    ids = np.array(sorted(cohort["session"].unique()))
+    sample_ids = rng.choice(ids, size=min(200, len(ids)), replace=False)
+    sample = cohort[cohort["session"].isin(sample_ids)].sort_values(["session", "bar_ix"])
+    xs, ys = [], []
+    for _, g in sample.groupby("session"):
+        xs.extend(g["x"].tolist() + [None])
+        ys.extend(g["close_plot"].tolist() + [None])
+
+    agg = (
+        cohort.groupby("x")["close_plot"]
+        .agg(
+            p25=lambda s: s.quantile(0.25),
+            p50="median",
+            p75=lambda s: s.quantile(0.75),
+            n="count",
+        )
+        .reset_index()
+        .sort_values("x")
+    )
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scattergl(
+            x=xs, y=ys, mode="lines",
+            line=dict(width=1, color="rgba(80,120,220,0.18)"),
+            showlegend=False, hoverinfo="skip", name="sessions",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(x=agg["x"], y=agg["p75"], mode="lines",
+                   line=dict(width=0), showlegend=False, hoverinfo="skip")
+    )
+    fig.add_trace(
+        go.Scatter(x=agg["x"], y=agg["p25"], mode="lines",
+                   line=dict(width=0), fill="tonexty",
+                   fillcolor="rgba(220,60,60,0.18)", name="25–75 pct")
+    )
+    fig.add_trace(
+        go.Scatter(x=agg["x"], y=agg["p50"], mode="lines",
+                   line=dict(width=2.5, color="crimson"), name="median")
+    )
+    if align_relative:
+        fig.add_vline(x=0, line_dash="dash", line_color="black")
+    else:
+        fig.add_vline(x=HALF - 0.5, line_dash="dash", line_color="gray")
+    fig.update_layout(
+        height=480,
+        title=f"Cohort paths — {label} — {len(ids)} sessions (showing {len(sample_ids)})",
+        xaxis_title="bars from event" if align_relative else "bar_ix",
+        yaxis_title="close (rebased)" if rebase else "close",
+        legend=dict(orientation="h", y=1.08),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Train-only: return from event bar → end
+    if split == "train":
+        full_bars = train_full_bars()
+        last_close = full_bars.groupby("session").tail(1).set_index("session")["close"]
+        evt_close = (
+            full_bars.merge(
+                first_occ[["session", "bar_ix"]].rename(columns={"bar_ix": "event_bar"}),
+                on="session",
+            )
+            .query("bar_ix == event_bar")
+            .set_index("session")["close"]
+        )
+        cohort_ret = (last_close.loc[evt_close.index] / evt_close - 1).rename("ret_to_end")
+        baseline_ret = summarize_train_full().set_index("session")["second_half_return"]
+
+        cols = st.columns(4)
+        cols[0].metric("Cohort mean return (event→end)", f"{cohort_ret.mean()*100:.3f}%")
+        cols[1].metric("Baseline mean (2nd-half)", f"{baseline_ret.mean()*100:.3f}%")
+        cols[2].metric("Cohort std", f"{cohort_ret.std()*100:.3f}%")
+        cols[3].metric("Cohort Sharpe (long)", f"{sharpe(cohort_ret.to_numpy()):.2f}")
+
+        comp = pd.concat(
+            [
+                pd.DataFrame({"group": "cohort (event→end)", "ret": cohort_ret.to_numpy()}),
+                pd.DataFrame({"group": "all train (half→end)", "ret": baseline_ret.to_numpy()}),
+            ],
+            ignore_index=True,
+        )
+        f = px.histogram(
+            comp, x="ret", color="group", barmode="overlay", opacity=0.55,
+            nbins=50, histnorm="probability density",
+            title="Return distribution: cohort vs overall train",
+        )
+        f.add_vline(x=0, line_dash="dash", line_color="gray")
+        f.update_layout(height=340, legend=dict(orientation="h", y=1.12))
+        st.plotly_chart(f, use_container_width=True)
+
+    st.subheader("Matched sessions (first occurrence per session)")
+    show = first_occ[["session", "bar_ix", "half", "headline", "template"]] if "half" in first_occ else first_occ[["session", "bar_ix", "headline", "template"]]
+    st.dataframe(show.reset_index(drop=True), use_container_width=True, hide_index=True)
+
+
 # ---------- App ----------
 
 def main():
@@ -560,6 +788,7 @@ def main():
         "Price dynamics": page_price_dynamics,
         "Target signal": page_target_signal,
         "Headlines": page_headlines,
+        "Headline cohort": page_headline_cohort,
         "Train vs test parity": page_parity,
     }
     choice = st.sidebar.radio("Page", list(pages.keys()))
