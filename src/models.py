@@ -15,6 +15,9 @@ Usage:
 
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import Ridge
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 
 # ---------------------------------------------------------------------------
@@ -31,9 +34,12 @@ def train_ridge(X: np.ndarray, y: np.ndarray, alpha: float = 1.0):
     - scripts/run_pipeline.py  (main training)
     - src/evaluate.py          (inside CV loop)
     """
-    # TODO: Create Pipeline([("scaler", StandardScaler()), ("ridge", Ridge(alpha=alpha))])
-    # TODO: Fit and return
-    raise NotImplementedError
+    model = Pipeline([
+        ("scaler", StandardScaler()),
+        ("ridge", Ridge(alpha=alpha)),
+    ])
+    model.fit(X, y)
+    return model
 
 
 # ---------------------------------------------------------------------------
