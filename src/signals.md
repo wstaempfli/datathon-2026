@@ -14,3 +14,4 @@ The researcher agent logs candidate signals here. The feature-engineer agent rea
 | Date       | Signal                  | \|corr\| | MI   | Status    | Notes                                                |
 |------------|-------------------------|----------|------|-----------|------------------------------------------------------|
 | 2026-04-18 | EXAMPLE_first_half_return | 0.00     | n/a  | candidate | Example row showing format — not a real signal yet. |
+| 2026-04-18 | intraday_momentum | 0.0712 | 0.0000 | candidate | fh_return = close[bar=49]/open[bar=0]-1. Pearson r=-0.0712 (p=2.4e-02), Spearman=-0.0599, R²=0.005, n=1000. Mean-reverting (opposite of Gao et al. 2018). sklearn MI=0 but linear signal clears threshold — decile 0 mean target +0.76%, decile 9 mean +0.03%. Size short proportional to fh_return. |

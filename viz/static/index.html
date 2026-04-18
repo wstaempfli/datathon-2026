@@ -6,28 +6,48 @@
   <title>datathon-2026 · session viz</title>
   <link rel="stylesheet" href="/styles.css" />
   <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <div id="app">
     <header class="topbar">
       <div class="brand">datathon-2026</div>
 
-      <label class="field">
-        <span class="label">split</span>
-        <select id="split"></select>
-      </label>
+      <div class="view-toggle" role="tablist" aria-label="view">
+        <button id="view-session" class="seg-btn active" data-view="session" role="tab">Session View</button>
+        <button id="view-analytics" class="seg-btn" data-view="analytics" role="tab">Analytics</button>
+      </div>
 
-      <button id="btn-prev" class="icon-btn" title="previous session (←)">◀</button>
+      <div id="session-controls" class="control-group">
+        <label class="field">
+          <span class="label">split</span>
+          <select id="split"></select>
+        </label>
 
-      <label class="field">
-        <span class="label">session</span>
-        <input id="session-id" type="number" min="0" step="1" inputmode="numeric" />
-      </label>
+        <button id="btn-prev" class="icon-btn" title="previous session (←)">◀</button>
 
-      <button id="btn-next" class="icon-btn" title="next session (→)">▶</button>
-      <button id="btn-random" title="random session">random</button>
+        <label class="field">
+          <span class="label">session</span>
+          <input id="session-id" type="number" min="0" step="1" inputmode="numeric" />
+        </label>
 
-      <div id="meta" class="meta"></div>
+        <button id="btn-next" class="icon-btn" title="next session (→)">▶</button>
+        <button id="btn-random" title="random session">random</button>
+
+        <div id="meta" class="meta"></div>
+      </div>
+
+      <div id="analytics-controls" class="control-group" style="display:none">
+        <label class="field">
+          <span class="label">feature file</span>
+          <select id="an-file"></select>
+        </label>
+        <label class="field">
+          <span class="label">column</span>
+          <select id="an-col"></select>
+        </label>
+        <div id="an-meta" class="meta"></div>
+      </div>
 
       <div class="hotkeys">
         <kbd>←</kbd><kbd>→</kbd> nav &nbsp;
@@ -36,7 +56,7 @@
       </div>
     </header>
 
-    <main class="main">
+    <main class="main" id="main-session">
       <aside class="sidebar">
         <section>
           <h3>features</h3>
@@ -53,6 +73,36 @@
           </div>
         </div>
       </section>
+    </main>
+
+    <main class="analytics-main" id="main-analytics" style="display:none">
+      <div class="analytics-cards">
+        <section class="card">
+          <header class="card-head">
+            <h3>Scatter</h3>
+            <div id="an-scatter-stats" class="card-stats muted"></div>
+          </header>
+          <div class="chart-wrap"><canvas id="an-scatter"></canvas></div>
+        </section>
+
+        <section class="card">
+          <header class="card-head">
+            <h3>Deciles</h3>
+            <div class="card-stats muted">mean target_return per decile, 95% CI</div>
+          </header>
+          <div class="chart-wrap"><canvas id="an-deciles"></canvas></div>
+        </section>
+
+        <section class="card">
+          <header class="card-head"><h3>Correlation metrics</h3></header>
+          <table id="an-metrics" class="kv-table"></table>
+        </section>
+
+        <section class="card">
+          <header class="card-head"><h3>Feature importance (top 10)</h3></header>
+          <table id="an-importance" class="kv-table"></table>
+        </section>
+      </div>
     </main>
   </div>
 

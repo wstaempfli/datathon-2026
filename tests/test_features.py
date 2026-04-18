@@ -146,3 +146,15 @@ def test_training_stats_roundtrip() -> None:
         bars_seen, headlines_seen, sent, training_stats=sentinel
     )
     assert passed_through == sentinel
+
+
+def test_fh_return_present_and_named() -> None:
+    bars_seen, headlines_seen, sent = _synth()
+    _, feature_names, _ = make_features(bars_seen, headlines_seen, sent)
+    assert "fh_return" in feature_names
+
+
+def test_fh_return_domain_sane() -> None:
+    bars_seen, headlines_seen, sent = _synth()
+    X, _, _ = make_features(bars_seen, headlines_seen, sent)
+    assert (X["fh_return"].abs() < 0.5).all()

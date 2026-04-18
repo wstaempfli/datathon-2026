@@ -18,6 +18,7 @@ function can be called identically for train and test (test has no target).
 # NaN-policy template (fill in as features are added)
 # --------------------------------------------------------------------------
 # PRICE features         : default fill 0.0 unless noted below
+#   - fh_return          : fill 0.0 when open[0] or close[49] is missing or zero
 #   - close_pos_in_range : fill 0.5 (midpoint) when high == low
 #   - wick_asymmetry     : fill 1.0 (neutral) when denominator is zero
 #   - rsi_at_halftime    : fill 50.0 (neutral) when insufficient data
@@ -89,7 +90,12 @@ def make_features(
     # ------------------------------------------------------------------
     # PRICE FEATURES (per-session, computed from seen bars only)
     # ------------------------------------------------------------------
-    # TODO: add price-derived features here (returns, vol, range, slope, rsi, ...)
+    # fh_return: first-half return from seen bars only. Uses bar 0's open and
+    # bar 49's close. Mean-reverting sign against target (r ~= -0.07, p ~= 0.02).
+    opens = bars_seen.loc[bars_seen["bar_ix"] == 0].set_index("session")["open"]
+    closes = bars_seen.loc[bars_seen["bar_ix"] == 49].set_index("session")["close"]
+    fh_return = (closes / opens.replace(0.0, np.nan) - 1.0).reindex(session_index)
+    fh_return = fh_return.fillna(0.0)
 
     # ------------------------------------------------------------------
     # CROSS-SESSION FEATURES (require training_stats)
@@ -109,7 +115,10 @@ def make_features(
     # ------------------------------------------------------------------
     # TODO: add interactions such as sentiment_x_invvol, sentiment_price_agree.
 
-    X = pd.DataFrame({"_const": 0.0}, index=session_index)
+    X = pd.DataFrame(
+        {"_const": 0.0, "fh_return": fh_return.to_numpy()},
+        index=session_index,
+    )
     feature_names: list[str] = list(X.columns)
 
     # Pass-through contract: apply mode returns the stats it was given so callers

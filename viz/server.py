@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator
 
+import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -22,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 FEATURES_DIR = ROOT / "features"
+MODELS_DIR = ROOT / "models"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 SPLITS = ("train", "public_test", "private_test")
@@ -29,6 +31,7 @@ SEEN_MAX_BAR = 49  # bar_ix 0..49 is always visible; 50..99 is "unseen"
 
 DATA: dict[str, dict] = {}
 FEATURES_CACHE: dict[str, pd.DataFrame] = {}
+_TARGETS: dict[str, pd.DataFrame] = {}  # module-level cache: key "df" → targets DataFrame
 _sse_clients: set[asyncio.Queue] = set()
 
 
@@ -233,6 +236,196 @@ async def get_feature(name: str, session_id: int):
         sub = sub.sort_values("bar_ix")
     records = json.loads(sub.to_json(orient="records"))
     return records
+
+
+def _get_targets() -> pd.DataFrame:
+    """Load + cache train-set targets ([session, target_return])."""
+    df = _TARGETS.get("df")
+    if df is None:
+        # Local import so a src import error doesn't break unrelated routes.
+        from src.data import compute_targets
+
+        df = compute_targets()
+        _TARGETS["df"] = df
+    return df
+
+
+@app.get("/api/analytics")
+async def get_analytics(feature_file: str, feature_col: str):
+    path = FEATURES_DIR / feature_file
+    if not path.exists() or path.suffix not in (".csv", ".parquet"):
+        raise HTTPException(404, f"no feature file: {feature_file}")
+
+    df = FEATURES_CACHE.get(feature_file)
+    if df is None:
+        df = _load_feature_file(path)
+        FEATURES_CACHE[feature_file] = df
+
+    if "session" not in df.columns:
+        raise HTTPException(400, "feature file is missing 'session' column")
+    if feature_col not in df.columns:
+        raise HTTPException(400, f"feature_col {feature_col!r} not in {feature_file}")
+
+    # If the file is per-bar, collapse to one row per session (last bar value).
+    sub = df[["session", feature_col]].copy()
+    if "bar_ix" in df.columns:
+        sub = (
+            df.sort_values(["session", "bar_ix"])
+            .groupby("session", as_index=False)
+            .last()[["session", feature_col]]
+        )
+
+    targets = _get_targets()
+    merged = sub.merge(targets, on="session", how="inner").dropna(
+        subset=[feature_col, "target_return"]
+    )
+    n = int(len(merged))
+    if n < 3:
+        raise HTTPException(400, f"not enough rows after join/dropna: n={n}")
+
+    x = merged[feature_col].to_numpy(dtype=float)
+    y = merged["target_return"].to_numpy(dtype=float)
+    sessions = merged["session"].to_numpy()
+
+    # Correlation metrics. scipy is an optional dep; fall back to numpy if missing.
+    try:
+        from scipy import stats as _stats
+
+        pr = _stats.pearsonr(x, y)
+        sr = _stats.spearmanr(x, y)
+        pearson_r = _clean_float(pr.statistic if hasattr(pr, "statistic") else pr[0])
+        pearson_p = _clean_float(pr.pvalue if hasattr(pr, "pvalue") else pr[1])
+        spearman_r = _clean_float(
+            sr.statistic if hasattr(sr, "statistic") else sr[0]
+        )
+    except Exception:  # noqa: BLE001
+        # Fallback: numpy pearson only; spearman via rank-pearson.
+        pearson_r = _clean_float(np.corrcoef(x, y)[0, 1])
+        pearson_p = None
+        rx = pd.Series(x).rank().to_numpy()
+        ry = pd.Series(y).rank().to_numpy()
+        spearman_r = _clean_float(np.corrcoef(rx, ry)[0, 1])
+
+    # Deciles via qcut; duplicates="drop" handles low-cardinality features.
+    deciles: list[dict] = []
+    try:
+        bins = pd.qcut(merged[feature_col], 10, duplicates="drop")
+        grp = merged.groupby(bins, observed=True)["target_return"]
+        for i, (interval, ys) in enumerate(grp, start=1):
+            vals = ys.to_numpy(dtype=float)
+            m = int(len(vals))
+            if m == 0:
+                continue
+            x_mid = float((interval.left + interval.right) / 2)
+            mean_y = float(vals.mean())
+            std_y = float(vals.std(ddof=1)) if m > 1 else 0.0
+            sem = std_y / (m ** 0.5) if m > 0 else 0.0
+            ci95 = 1.96 * sem
+            deciles.append(
+                {
+                    "bin": i,
+                    "x_mid": _clean_float(x_mid),
+                    "mean_y": _clean_float(mean_y),
+                    "ci95": _clean_float(ci95),
+                    "n": m,
+                }
+            )
+    except Exception as e:  # noqa: BLE001
+        # Non-fatal — analytics without deciles is still useful.
+        deciles = []
+        _ = e
+
+    # Scatter points. Cap payload at 5000 rows for safety (train is ~1000 anyway).
+    pts_df = merged
+    if len(pts_df) > 5000:
+        pts_df = pts_df.sample(5000, random_state=0).sort_values("session")
+    points = [
+        {
+            "session": int(s),
+            "x": _clean_float(xv),
+            "y": _clean_float(yv),
+        }
+        for s, xv, yv in zip(
+            pts_df["session"].to_numpy(),
+            pts_df[feature_col].to_numpy(),
+            pts_df["target_return"].to_numpy(),
+        )
+    ]
+
+    # Feature importance (top 10 by gain if the file exists).
+    importance: list[dict] = []
+    imp_path = MODELS_DIR / "feature_importance.csv"
+    if imp_path.exists():
+        try:
+            imp = pd.read_csv(imp_path)
+            # Tolerant schema: first col = feature name, look for a gain-like col.
+            if imp.shape[1] >= 2:
+                first = imp.columns[0]
+                gain_col = None
+                for c in imp.columns[1:]:
+                    lc = str(c).lower()
+                    if "gain" in lc or "importance" in lc or lc in ("0", "value"):
+                        gain_col = c
+                        break
+                if gain_col is None:
+                    gain_col = imp.columns[1]
+                imp = imp[[first, gain_col]].rename(
+                    columns={first: "feature", gain_col: "gain"}
+                )
+                imp["gain"] = pd.to_numeric(imp["gain"], errors="coerce")
+                imp = imp.dropna(subset=["gain"]).sort_values("gain", ascending=False)
+                importance = [
+                    {"feature": str(r.feature), "gain": _clean_float(r.gain)}
+                    for r in imp.head(10).itertuples(index=False)
+                ]
+        except Exception:  # noqa: BLE001
+            importance = []
+
+    return {
+        "feature": feature_col,
+        "feature_file": feature_file,
+        "n": n,
+        "points": points,
+        "pearson_r": pearson_r,
+        "pearson_p": pearson_p,
+        "spearman_r": spearman_r,
+        "deciles": deciles,
+        "importance": importance,
+    }
+
+
+@app.get("/api/metrics")
+async def get_metrics():
+    log_path = ROOT / "src" / "feature_log.md"
+    if not log_path.exists():
+        return {"feature_log_raw": ""}
+    text = log_path.read_text(encoding="utf-8", errors="replace")
+
+    # Parse markdown table rows: | v1 | ... | cv sharpe | ... |
+    latest_version: str | None = None
+    latest_cv: str | None = None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("|") or line.startswith("|-") or line.startswith("|:"):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) < 5:
+            continue
+        # Skip header row
+        if cells[0].lower() in ("version", ""):
+            continue
+        # Table shape from feature_log.md:
+        # Version | Date | Features | Feature Count | CV Sharpe | Notes
+        cv = cells[4]
+        if cv.upper() in ("TBD", "N/A", "-", ""):
+            continue
+        latest_version = cells[0]
+        latest_cv = cv
+
+    if latest_version is not None:
+        return {"latest_version": latest_version, "cv_sharpe": latest_cv}
+    # Fallback: return truncated raw log.
+    return {"feature_log_raw": text[:2048]}
 
 
 @app.get("/api/events")

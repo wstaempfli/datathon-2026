@@ -470,12 +470,318 @@ function connectSSE() {
   es.addEventListener('reload', () => {
     for (const k of Array.from(state.overlays.keys())) removeOverlay(k);
     refreshFeatures();
+    // If on analytics, re-fetch with the current selection.
+    if (analytics.active) analytics.loadCurrent();
   });
   es.addEventListener('ready', () => {});
   es.onerror = () => {
     // EventSource will auto-reconnect
   };
 }
+
+// ── analytics view ──────────────────────────────────────────────────
+
+const analytics = {
+  active: false,
+  files: [],  // [{name, columns, per_bar, rows}]
+  selFile: null,
+  selCol: null,
+  scatter: null,
+  deciles: null,
+  loadSeq: 0,
+  async init() {
+    // Restore persisted selection.
+    try {
+      this.selFile = localStorage.getItem('an.selFile') || null;
+      this.selCol = localStorage.getItem('an.selCol') || null;
+    } catch (_) {}
+    this.$file = document.getElementById('an-file');
+    this.$col = document.getElementById('an-col');
+    this.$file.addEventListener('change', () => {
+      this.selFile = this.$file.value;
+      this.persist();
+      this.populateCols();
+      this.loadCurrent();
+    });
+    this.$col.addEventListener('change', () => {
+      this.selCol = this.$col.value;
+      this.persist();
+      this.loadCurrent();
+    });
+  },
+  persist() {
+    try {
+      if (this.selFile) localStorage.setItem('an.selFile', this.selFile);
+      if (this.selCol) localStorage.setItem('an.selCol', this.selCol);
+    } catch (_) {}
+  },
+  async refreshFiles() {
+    // Per-session files only. Reuse the /api/features response.
+    const all = await fetchJSON('/api/features');
+    this.files = all.filter((f) => !f.per_bar && !f.error && (f.columns || []).length);
+    // Default: prefer fh_return/fh_return if present and nothing persisted.
+    if (!this.selFile || !this.files.some((f) => f.name === this.selFile)) {
+      const fh = this.files.find((f) => f.name === 'fh_return.parquet');
+      this.selFile = fh ? fh.name : (this.files[0] ? this.files[0].name : null);
+      this.selCol = null;
+    }
+    this.$file.innerHTML = this.files
+      .map((f) => `<option value="${f.name}">${f.name}</option>`)
+      .join('');
+    if (this.selFile) this.$file.value = this.selFile;
+    this.populateCols();
+  },
+  populateCols() {
+    const f = this.files.find((x) => x.name === this.selFile);
+    const cols = f ? (f.columns || []) : [];
+    this.$col.innerHTML = cols.map((c) => `<option value="${c}">${c}</option>`).join('');
+    if (!this.selCol || !cols.includes(this.selCol)) {
+      // Prefer fh_return col, else first numeric.
+      this.selCol = cols.includes('fh_return') ? 'fh_return' : (cols[0] || null);
+    }
+    if (this.selCol) this.$col.value = this.selCol;
+    this.persist();
+  },
+  async loadCurrent() {
+    if (!this.selFile || !this.selCol) return;
+    const seq = ++this.loadSeq;
+    try {
+      const q = `feature_file=${encodeURIComponent(this.selFile)}&feature_col=${encodeURIComponent(this.selCol)}`;
+      const d = await fetchJSON(`/api/analytics?${q}`);
+      if (seq !== this.loadSeq) return;  // stale
+      this.render(d);
+    } catch (e) {
+      if (seq !== this.loadSeq) return;
+      document.getElementById('an-meta').innerHTML =
+        `<span class="chip neg">analytics error: ${escapeHtml(e.message)}</span>`;
+      this.renderEmpty();
+    }
+  },
+  renderEmpty() {
+    if (this.scatter) { this.scatter.destroy(); this.scatter = null; }
+    if (this.deciles) { this.deciles.destroy(); this.deciles = null; }
+    document.getElementById('an-scatter-stats').textContent = '';
+    document.getElementById('an-metrics').innerHTML = '';
+    document.getElementById('an-importance').innerHTML = '';
+  },
+  render(d) {
+    const fmt = (v, nd = 4) => (v === null || v === undefined || Number.isNaN(v))
+      ? '—' : Number(v).toFixed(nd);
+    // Header stats + card header.
+    const rStr = fmt(d.pearson_r, 3);
+    const pStr = d.pearson_p === null || d.pearson_p === undefined
+      ? '—' : (d.pearson_p < 1e-4 ? d.pearson_p.toExponential(2) : d.pearson_p.toFixed(4));
+    document.getElementById('an-meta').innerHTML =
+      `<span class="chip">n=${d.n}</span>` +
+      `<span class="chip">r=${rStr}</span>` +
+      `<span class="chip">p=${pStr}</span>`;
+    document.getElementById('an-scatter-stats').textContent =
+      `Pearson r = ${rStr}   p = ${pStr}   n = ${d.n}`;
+
+    // Regression line: simple OLS on the returned points.
+    const pts = (d.points || []).filter((p) => p.x !== null && p.y !== null);
+    let lineData = [];
+    if (pts.length >= 2) {
+      let sx = 0, sy = 0, sxx = 0, sxy = 0;
+      for (const p of pts) { sx += p.x; sy += p.y; sxx += p.x * p.x; sxy += p.x * p.y; }
+      const nP = pts.length;
+      const denom = nP * sxx - sx * sx;
+      if (Math.abs(denom) > 1e-18) {
+        const slope = (nP * sxy - sx * sy) / denom;
+        const intercept = (sy - slope * sx) / nP;
+        let xmin = Infinity, xmax = -Infinity;
+        for (const p of pts) { if (p.x < xmin) xmin = p.x; if (p.x > xmax) xmax = p.x; }
+        lineData = [
+          { x: xmin, y: intercept + slope * xmin },
+          { x: xmax, y: intercept + slope * xmax },
+        ];
+      }
+    }
+
+    // Scatter chart
+    const scatterCfg = {
+      type: 'scatter',
+      data: {
+        datasets: [
+          {
+            label: 'sessions',
+            data: pts.map((p) => ({ x: p.x, y: p.y })),
+            backgroundColor: 'rgba(77, 163, 255, 0.55)',
+            borderColor: 'rgba(77, 163, 255, 0.9)',
+            pointRadius: 2.5,
+            pointHoverRadius: 4,
+          },
+          {
+            label: 'OLS fit',
+            type: 'line',
+            data: lineData,
+            borderColor: '#f59e0b',
+            backgroundColor: '#f59e0b',
+            borderWidth: 2,
+            pointRadius: 0,
+            fill: false,
+            showLine: true,
+            order: 0,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        parsing: false,
+        scales: {
+          x: {
+            type: 'linear',
+            title: { display: true, text: d.feature, color: '#7a8699' },
+            ticks: { color: '#7a8699' },
+            grid: { color: 'rgba(31, 42, 58, 0.6)' },
+          },
+          y: {
+            title: { display: true, text: 'target_return', color: '#7a8699' },
+            ticks: { color: '#7a8699' },
+            grid: { color: 'rgba(31, 42, 58, 0.6)' },
+          },
+        },
+        plugins: {
+          legend: { labels: { color: '#d7e0ea', boxWidth: 10, boxHeight: 10 } },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const { x, y } = ctx.parsed;
+                return `${d.feature}=${x.toFixed(4)}  target=${y.toFixed(4)}`;
+              },
+            },
+          },
+        },
+      },
+    };
+    const scCanvas = document.getElementById('an-scatter');
+    if (this.scatter) this.scatter.destroy();
+    this.scatter = new Chart(scCanvas, scatterCfg);
+
+    // Deciles chart: bar with manually-drawn vertical error bars via a custom plugin.
+    // Avoid adding yet another CDN plugin — the drawn path is more robust.
+    const decBins = d.deciles || [];
+    const errorBarPlugin = {
+      id: 'errBars',
+      afterDatasetsDraw(chart) {
+        const meta = chart.getDatasetMeta(0);
+        if (!meta || !meta.data) return;
+        const { ctx, scales } = chart;
+        ctx.save();
+        ctx.strokeStyle = 'rgba(215, 224, 234, 0.7)';
+        ctx.lineWidth = 1;
+        meta.data.forEach((bar, i) => {
+          const b = decBins[i];
+          if (!b || b.ci95 == null) return;
+          const x = bar.x;
+          const yTop = scales.y.getPixelForValue(b.mean_y + b.ci95);
+          const yBot = scales.y.getPixelForValue(b.mean_y - b.ci95);
+          const cap = 4;
+          ctx.beginPath();
+          ctx.moveTo(x, yTop); ctx.lineTo(x, yBot);
+          ctx.moveTo(x - cap, yTop); ctx.lineTo(x + cap, yTop);
+          ctx.moveTo(x - cap, yBot); ctx.lineTo(x + cap, yBot);
+          ctx.stroke();
+        });
+        ctx.restore();
+      },
+    };
+    const decCfg = {
+      type: 'bar',
+      data: {
+        labels: decBins.map((b) => String(b.bin)),
+        datasets: [{
+          label: 'mean target_return',
+          data: decBins.map((b) => b.mean_y),
+          backgroundColor: decBins.map((b) => (b.mean_y >= 0 ? 'rgba(38, 166, 154, 0.6)' : 'rgba(239, 83, 80, 0.6)')),
+          borderColor: decBins.map((b) => (b.mean_y >= 0 ? '#26a69a' : '#ef5350')),
+          borderWidth: 1,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        scales: {
+          x: {
+            title: { display: true, text: 'decile', color: '#7a8699' },
+            ticks: { color: '#7a8699' },
+            grid: { display: false },
+          },
+          y: {
+            title: { display: true, text: 'mean target_return', color: '#7a8699' },
+            ticks: { color: '#7a8699' },
+            grid: { color: 'rgba(31, 42, 58, 0.6)' },
+          },
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const b = decBins[ctx.dataIndex];
+                const parts = [
+                  `mean = ${b.mean_y == null ? '—' : b.mean_y.toFixed(4)}`,
+                  `ci95 = ±${b.ci95 == null ? '—' : b.ci95.toFixed(4)}`,
+                  `x_mid = ${b.x_mid == null ? '—' : b.x_mid.toFixed(4)}`,
+                  `n = ${b.n}`,
+                ];
+                return parts;
+              },
+            },
+          },
+        },
+      },
+      plugins: [errorBarPlugin],
+    };
+    const decCanvas = document.getElementById('an-deciles');
+    if (this.deciles) this.deciles.destroy();
+    this.deciles = new Chart(decCanvas, decCfg);
+
+    // Metrics table
+    const metricsRows = [
+      ['Pearson r', fmt(d.pearson_r, 4)],
+      ['p-value', pStr],
+      ['Spearman ρ', fmt(d.spearman_r, 4)],
+      ['n', String(d.n)],
+    ];
+    document.getElementById('an-metrics').innerHTML =
+      `<thead><tr><th>metric</th><th class="num">value</th></tr></thead><tbody>` +
+      metricsRows.map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td class="num">${escapeHtml(v)}</td></tr>`).join('') +
+      `</tbody>`;
+
+    // Importance table
+    const imp = d.importance || [];
+    if (!imp.length) {
+      document.getElementById('an-importance').innerHTML =
+        `<tbody><tr><td class="muted"><em>no models/feature_importance.csv yet</em></td></tr></tbody>`;
+    } else {
+      document.getElementById('an-importance').innerHTML =
+        `<thead><tr><th>feature</th><th class="num">gain</th></tr></thead><tbody>` +
+        imp.map((r) => `<tr><td>${escapeHtml(r.feature)}</td><td class="num">${fmt(r.gain, 6)}</td></tr>`).join('') +
+        `</tbody>`;
+    }
+  },
+};
+
+function setView(view) {
+  const isAn = view === 'analytics';
+  analytics.active = isAn;
+  document.getElementById('view-session').classList.toggle('active', !isAn);
+  document.getElementById('view-analytics').classList.toggle('active', isAn);
+  document.getElementById('main-session').style.display = isAn ? 'none' : '';
+  document.getElementById('main-analytics').style.display = isAn ? '' : 'none';
+  document.getElementById('session-controls').style.display = isAn ? 'none' : '';
+  document.getElementById('analytics-controls').style.display = isAn ? '' : 'none';
+  if (isAn) {
+    analytics.refreshFiles().then(() => analytics.loadCurrent());
+  }
+}
+
+document.getElementById('view-session').addEventListener('click', () => setView('session'));
+document.getElementById('view-analytics').addEventListener('click', () => setView('analytics'));
 
 // ── init ────────────────────────────────────────────────────────────
 
@@ -486,5 +792,6 @@ function connectSSE() {
   await loadSessions();
   await loadSession();
   await refreshFeatures();
+  await analytics.init();
   connectSSE();
 })();
