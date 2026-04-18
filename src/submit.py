@@ -1,7 +1,7 @@
 """
 Submission generation and validation.
 
-Produces correctly formatted CSV files and validates them before saving.
+Produces correctly formatted CSV files from fitted models and validates them.
 
 Usage:
     from src.submit import generate_submission, validate_submission
@@ -77,30 +77,6 @@ def generate_submission(
     return sub
 
 
-def generate_always_long_submission(
-    bars_test: pd.DataFrame,
-    output_path: str | None = None,
-) -> pd.DataFrame:
-    """Generate the always-long baseline submission (target_position = +1).
-
-    This is our safety fallback — Sharpe ~2.766 guaranteed.
-
-    Called by
-    --------
-    - scripts/run_pipeline.py  (always generate as fallback)
-    """
-    sessions = bars_test["session"].unique()
-    sub = pd.DataFrame({
-        "session": sorted(sessions),
-        "target_position": 1.0,
-    })
-    if output_path is not None:
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        sub.to_csv(output_path, index=False)
-        print(f"Saved always-long submission to {output_path}: {len(sub)} sessions, all positions = +1.0")
-    return sub
-
-
 def validate_submission(
     submission: pd.DataFrame | str,
     test_bars_path: str,
@@ -119,7 +95,6 @@ def validate_submission(
 
     Called by
     --------
-    - generate_submission()     (automatic validation before saving)
     - scripts/run_pipeline.py   (explicit check)
     """
     # Load submission if path string
