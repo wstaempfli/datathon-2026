@@ -381,6 +381,73 @@ async def get_analytics(feature_file: str, feature_col: str):
         except Exception:  # noqa: BLE001
             importance = []
 
+    # Research sidecar (Gate 2 ablation + pre-computed histogram overlay).
+    # Written by scripts/rskew_ablation.py and the researcher's notebook at
+    # features/<stem>_research.json. Absent → hist/ablation are null so the UI
+    # hides those two cards.
+    hist_overlay: dict | None = None
+    ablation: dict | None = None
+    research_path = FEATURES_DIR / f"{Path(feature_file).stem}_research.json"
+    if research_path.exists():
+        try:
+            research = json.loads(research_path.read_text())
+            hist_overlay = research.get("hist")
+            ablation = research.get("ablation")
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Stability diagnostic (Gate 3): wasserstein_distance(train, split) ≤ 0.5 * std_train.
+    stability: dict | None = None
+    try:
+        feature_train = x  # values aligned to train sessions (already filtered/dropna'd)
+        std_train = float(np.std(feature_train, ddof=1)) if len(feature_train) > 1 else float("nan")
+        if not (math.isnan(std_train) or std_train == 0.0):
+            from scipy.stats import wasserstein_distance as _wd  # local import; scipy already used above
+
+            # Reload the raw feature df (already cached) and reduce to one row per session.
+            stab_src = df[["session", feature_col]].copy()
+            if "bar_ix" in df.columns:
+                stab_src = (
+                    df.sort_values(["session", "bar_ix"])
+                    .groupby("session", as_index=False)
+                    .last()[["session", feature_col]]
+                )
+            stab_src = stab_src.dropna(subset=[feature_col])
+
+            splits_out: list[dict] = []
+            all_pass = True
+            any_row = False
+            for sp in ("public_test", "private_test"):
+                split_sessions = DATA.get(sp, {}).get("sessions", [])
+                if not split_sessions:
+                    continue
+                vals = stab_src[stab_src["session"].isin(split_sessions)][feature_col].to_numpy(
+                    dtype=float
+                )
+                if len(vals) == 0:
+                    continue
+                wd_val = float(_wd(feature_train, vals))
+                ratio = wd_val / std_train
+                passed = bool(ratio <= 0.5)
+                all_pass = all_pass and passed
+                any_row = True
+                splits_out.append(
+                    {
+                        "split": sp,
+                        "wd": _clean_float(wd_val),
+                        "ratio": _clean_float(ratio),
+                        "pass": passed,
+                    }
+                )
+            stability = {
+                "std_train": _clean_float(std_train),
+                "splits": splits_out,
+                "threshold_ratio": 0.5,
+                "pass": bool(all_pass) if any_row else False,
+            }
+    except Exception:  # noqa: BLE001
+        stability = None
+
     return {
         "feature": feature_col,
         "feature_file": feature_file,
@@ -391,6 +458,9 @@ async def get_analytics(feature_file: str, feature_col: str):
         "spearman_r": spearman_r,
         "deciles": deciles,
         "importance": importance,
+        "stability": stability,
+        "hist": hist_overlay,
+        "ablation": ablation,
     }
 
 

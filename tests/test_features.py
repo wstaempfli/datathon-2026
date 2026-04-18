@@ -158,3 +158,15 @@ def test_fh_return_domain_sane() -> None:
     bars_seen, headlines_seen, sent = _synth()
     X, _, _ = make_features(bars_seen, headlines_seen, sent)
     assert (X["fh_return"].abs() < 0.5).all()
+
+
+def test_yz_vol_present_and_named() -> None:
+    bars_seen, headlines_seen, sent = _synth()
+    _, feature_names, _ = make_features(bars_seen, headlines_seen, sent)
+    assert "yz_vol" in feature_names
+
+
+def test_yz_vol_nonneg() -> None:
+    bars_seen, headlines_seen, sent = _synth()
+    X, _, _ = make_features(bars_seen, headlines_seen, sent)
+    assert (X["yz_vol"] >= 0).all()

@@ -19,6 +19,7 @@ function can be called identically for train and test (test has no target).
 # --------------------------------------------------------------------------
 # PRICE features         : default fill 0.0 unless noted below
 #   - fh_return          : fill 0.0 when open[0] or close[49] is missing or zero
+#   - yz_vol             : fill 0.0 when variance components are NaN (degenerate / constant-price sessions)
 #   - close_pos_in_range : fill 0.5 (midpoint) when high == low
 #   - wick_asymmetry     : fill 1.0 (neutral) when denominator is zero
 #   - rsi_at_halftime    : fill 50.0 (neutral) when insufficient data
@@ -47,6 +48,36 @@ _LEAK_SUBSTRINGS: tuple[str, ...] = (
     "bar_8",
     "bar_9",
 )
+
+
+def _yang_zhang_vol(bars_seen: pd.DataFrame) -> pd.Series:
+    """Yang-Zhang volatility over all seen bars per session.
+
+    Drift-independent OHLC volatility estimator. For 50 bars:
+      V_o  = var( ln(O_i / C_{i-1}) )       # bar-to-bar gap, skips bar 0
+      V_c  = var( ln(C_i / O_i) )           # intraday open-to-close
+      V_rs = mean( u(u-c) + d(d-c) )        # Rogers-Satchell, u=ln(H/O), d=ln(L/O)
+      k    = 0.34 / (1.34 + (n+1)/(n-1))    # n = gap returns = 49
+      yz   = sqrt(V_o + k*V_c + (1-k)*V_rs)
+
+    Reference: Yang & Zhang (2000), Journal of Business 73:477.
+    """
+    b = bars_seen.sort_values(["session", "bar_ix"]).copy()
+    b["close_prev"] = b.groupby("session")["close"].shift(1)
+    b["o"] = np.log(b["open"]  / b["close_prev"])
+    b["c"] = np.log(b["close"] / b["open"])
+    b["u"] = np.log(b["high"]  / b["open"])
+    b["d"] = np.log(b["low"]   / b["open"])
+
+    g = b.groupby("session")
+    v_o  = g["o"].var(ddof=1)
+    v_c  = g["c"].var(ddof=1)
+    v_rs = g.apply(lambda df: (df["u"] * (df["u"] - df["c"])
+                               + df["d"] * (df["d"] - df["c"])).mean())
+
+    n = 49
+    k = 0.34 / (1.34 + (n + 1) / (n - 1))
+    return np.sqrt(v_o + k * v_c + (1 - k) * v_rs).rename("yz_vol")
 
 
 def make_features(
@@ -97,6 +128,11 @@ def make_features(
     fh_return = (closes / opens.replace(0.0, np.nan) - 1.0).reindex(session_index)
     fh_return = fh_return.fillna(0.0)
 
+    # yz_vol: Yang-Zhang (2000) drift-independent OHLC volatility over bars 0-49.
+    # Gate 1 |r|=0.079, MI=0.0092 vs target; Gate 2 CV Sharpe lift +0.12 (4/5 folds);
+    # Gate 3 Wasserstein = 2% of train std (very stable across splits).
+    yz_vol = _yang_zhang_vol(bars_seen).reindex(session_index).fillna(0.0)
+
     # ------------------------------------------------------------------
     # CROSS-SESSION FEATURES (require training_stats)
     # ------------------------------------------------------------------
@@ -116,7 +152,11 @@ def make_features(
     # TODO: add interactions such as sentiment_x_invvol, sentiment_price_agree.
 
     X = pd.DataFrame(
-        {"_const": 0.0, "fh_return": fh_return.to_numpy()},
+        {
+            "_const": 0.0,
+            "fh_return": fh_return.to_numpy(),
+            "yz_vol": yz_vol.to_numpy(),
+        },
         index=session_index,
     )
     feature_names: list[str] = list(X.columns)

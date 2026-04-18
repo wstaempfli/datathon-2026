@@ -11,48 +11,52 @@
 <body>
   <div id="app">
     <header class="topbar">
-      <div class="brand">datathon-2026</div>
+      <div class="topbar-row row-primary">
+        <div class="brand">datathon-2026</div>
 
-      <div class="view-toggle" role="tablist" aria-label="view">
-        <button id="view-session" class="seg-btn active" data-view="session" role="tab">Session View</button>
-        <button id="view-analytics" class="seg-btn" data-view="analytics" role="tab">Analytics</button>
+        <div class="view-toggle" role="tablist" aria-label="view">
+          <button id="view-session" class="seg-btn active" data-view="session" role="tab">Session View</button>
+          <button id="view-analytics" class="seg-btn" data-view="analytics" role="tab">Analytics</button>
+        </div>
+
+        <div class="hotkeys">
+          <kbd>←</kbd><kbd>→</kbd> nav &nbsp;
+          <kbd>R</kbd> reload &nbsp;
+          <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> split
+        </div>
       </div>
 
-      <div id="session-controls" class="control-group">
-        <label class="field">
-          <span class="label">split</span>
-          <select id="split"></select>
-        </label>
+      <div class="topbar-row row-controls">
+        <div id="session-controls" class="control-group">
+          <label class="field">
+            <span class="label">split</span>
+            <select id="split"></select>
+          </label>
 
-        <button id="btn-prev" class="icon-btn" title="previous session (←)">◀</button>
+          <button id="btn-prev" class="icon-btn" title="previous session (←)">◀</button>
 
-        <label class="field">
-          <span class="label">session</span>
-          <input id="session-id" type="number" min="0" step="1" inputmode="numeric" />
-        </label>
+          <label class="field">
+            <span class="label">session</span>
+            <input id="session-id" type="number" min="0" step="1" inputmode="numeric" />
+          </label>
 
-        <button id="btn-next" class="icon-btn" title="next session (→)">▶</button>
-        <button id="btn-random" title="random session">random</button>
+          <button id="btn-next" class="icon-btn" title="next session (→)">▶</button>
+          <button id="btn-random" title="random session">random</button>
 
-        <div id="meta" class="meta"></div>
-      </div>
+          <div id="meta" class="meta"></div>
+        </div>
 
-      <div id="analytics-controls" class="control-group" style="display:none">
-        <label class="field">
-          <span class="label">feature file</span>
-          <select id="an-file"></select>
-        </label>
-        <label class="field">
-          <span class="label">column</span>
-          <select id="an-col"></select>
-        </label>
-        <div id="an-meta" class="meta"></div>
-      </div>
-
-      <div class="hotkeys">
-        <kbd>←</kbd><kbd>→</kbd> nav &nbsp;
-        <kbd>R</kbd> reload &nbsp;
-        <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> split
+        <div id="analytics-controls" class="control-group" style="display:none">
+          <label class="field">
+            <span class="label">feature file</span>
+            <select id="an-file"></select>
+          </label>
+          <label class="field">
+            <span class="label">column</span>
+            <select id="an-col"></select>
+          </label>
+          <div id="an-meta" class="meta"></div>
+        </div>
       </div>
     </header>
 
@@ -101,6 +105,30 @@
         <section class="card">
           <header class="card-head"><h3>Feature importance (top 10)</h3></header>
           <table id="an-importance" class="kv-table"></table>
+        </section>
+
+        <section class="card">
+          <header class="card-head">
+            <h3>Stability (train vs test)</h3>
+            <div id="an-stability-stats" class="card-stats muted"></div>
+          </header>
+          <table id="an-stability" class="kv-table"></table>
+        </section>
+
+        <section class="card">
+          <header class="card-head">
+            <h3>Distribution overlay (train · public · private)</h3>
+            <div id="an-hist-stats" class="card-stats muted"></div>
+          </header>
+          <div class="chart-wrap"><canvas id="an-hist"></canvas></div>
+        </section>
+
+        <section class="card">
+          <header class="card-head">
+            <h3>Ablation — Gate 2 (5-fold CV Sharpe)</h3>
+            <div id="an-ablation-stats" class="card-stats muted"></div>
+          </header>
+          <div class="chart-wrap"><canvas id="an-ablation"></canvas></div>
         </section>
       </div>
     </main>

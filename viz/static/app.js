@@ -488,8 +488,12 @@ const analytics = {
   selCol: null,
   scatter: null,
   deciles: null,
+  histChart: null,
+  ablationChart: null,
   loadSeq: 0,
-  async init() {
+  init() {
+    if (this._inited) return;
+    this._inited = true;
     // Restore persisted selection.
     try {
       this.selFile = localStorage.getItem('an.selFile') || null;
@@ -560,9 +564,13 @@ const analytics = {
   renderEmpty() {
     if (this.scatter) { this.scatter.destroy(); this.scatter = null; }
     if (this.deciles) { this.deciles.destroy(); this.deciles = null; }
+    if (this.histChart) { this.histChart.destroy(); this.histChart = null; }
+    if (this.ablationChart) { this.ablationChart.destroy(); this.ablationChart = null; }
     document.getElementById('an-scatter-stats').textContent = '';
     document.getElementById('an-metrics').innerHTML = '';
     document.getElementById('an-importance').innerHTML = '';
+    document.getElementById('an-hist-stats').textContent = '';
+    document.getElementById('an-ablation-stats').textContent = '';
   },
   render(d) {
     const fmt = (v, nd = 4) => (v === null || v === undefined || Number.isNaN(v))
@@ -763,6 +771,141 @@ const analytics = {
         imp.map((r) => `<tr><td>${escapeHtml(r.feature)}</td><td class="num">${fmt(r.gain, 6)}</td></tr>`).join('') +
         `</tbody>`;
     }
+
+    // Stability table (Gate 3: wasserstein_distance(train, split) / std_train ≤ 0.5)
+    const stabEl = document.getElementById('an-stability');
+    const stabStats = document.getElementById('an-stability-stats');
+    const stab = d.stability;
+    if (!stab) {
+      if (stabEl) stabEl.innerHTML =
+        `<tbody><tr><td class="muted"><em>needs feature values across all three splits</em></td></tr></tbody>`;
+      if (stabStats) { stabStats.textContent = ''; stabStats.className = 'card-stats muted'; }
+    } else {
+      const fmtWd = (v) => {
+        if (v === null || v === undefined || Number.isNaN(v)) return '—';
+        const a = Math.abs(v);
+        if (a > 0 && a < 1e-3) return v.toExponential(2);
+        return Number(v).toFixed(4);
+      };
+      const fmtRatio = (v) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(3);
+      const rows = (stab.splits || []).map((r) => {
+        const cls = r.pass ? '' : ' class="neg"';
+        const mark = r.pass ? '✓' : '✗';
+        return `<tr${cls}><td>${escapeHtml(r.split)}</td><td class="num">${fmtWd(r.wd)}</td><td class="num">${fmtRatio(r.ratio)}</td><td>${mark}</td></tr>`;
+      }).join('');
+      const thr = (stab.threshold_ratio === null || stab.threshold_ratio === undefined)
+        ? '0.50' : Number(stab.threshold_ratio).toFixed(2);
+      const overallCls = stab.pass ? ' class="pos"' : ' class="neg"';
+      const overallMark = stab.pass ? '✓' : '✗';
+      const footer = `<tr${overallCls}><td colspan="3"><em>overall · threshold: ratio ≤ ${thr}</em></td><td>${overallMark}</td></tr>`;
+      const body = rows || `<tr><td colspan="4" class="muted"><em>no test split coverage</em></td></tr>`;
+      stabEl.innerHTML =
+        `<thead><tr><th>split</th><th class="num">Wasserstein</th><th class="num">WD / std</th><th>pass</th></tr></thead>` +
+        `<tbody>${body}${footer}</tbody>`;
+      if (stabStats) {
+        stabStats.textContent = `std_train = ${fmtWd(stab.std_train)}`;
+        stabStats.className = 'card-stats ' + (stab.pass ? 'pos' : 'neg');
+      }
+    }
+
+    this.renderHist(d.hist);
+    this.renderAblation(d.ablation);
+  },
+  renderHist(hist) {
+    const canvas = document.getElementById('an-hist');
+    const stats = document.getElementById('an-hist-stats');
+    if (this.histChart) { this.histChart.destroy(); this.histChart = null; }
+    if (!hist || !hist.bin_edges || !hist.train) {
+      stats.textContent = 'no research sidecar — run the notebook to populate';
+      stats.className = 'card-stats muted';
+      canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+    const edges = hist.bin_edges;
+    const centers = edges.slice(0, -1).map((e, i) => (e + edges[i + 1]) / 2);
+    const mkSet = (label, data, color) => ({
+      label, data, borderColor: color,
+      backgroundColor: color.replace('1)', '0.15)'),
+      borderWidth: 2, pointRadius: 0, tension: 0.25, fill: true,
+    });
+    this.histChart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: centers.map((c) => c.toPrecision(3)),
+        datasets: [
+          mkSet('train',   hist.train,   'rgba(38, 166, 154, 1)'),
+          mkSet('public',  hist.public,  'rgba(245, 158, 11, 1)'),
+          mkSet('private', hist.private, 'rgba(168, 85, 247, 1)'),
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        scales: {
+          x: { title: { display: true, text: 'feature value', color: '#7a8699' },
+               ticks: { color: '#7a8699', maxTicksLimit: 10 }, grid: { display: false } },
+          y: { title: { display: true, text: 'density', color: '#7a8699' },
+               ticks: { color: '#7a8699' }, grid: { color: 'rgba(31, 42, 58, 0.6)' } },
+        },
+        plugins: { legend: { labels: { color: '#d7e0ea', boxWidth: 10, boxHeight: 10 } } },
+      },
+    });
+    stats.textContent = `${edges.length - 1} bins · visual check for regime drift`;
+    stats.className = 'card-stats muted';
+  },
+  renderAblation(ab) {
+    const canvas = document.getElementById('an-ablation');
+    const stats = document.getElementById('an-ablation-stats');
+    if (this.ablationChart) { this.ablationChart.destroy(); this.ablationChart = null; }
+    if (!ab || !ab.per_fold_sharpe_without || !ab.per_fold_sharpe_with) {
+      stats.textContent = 'no ablation data — run scripts/rskew_ablation.py';
+      stats.className = 'card-stats muted';
+      canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+    const folds = ab.per_fold_sharpe_without.map((_, i) => `fold ${i + 1}`);
+    const pass = !!ab.gate2;
+    this.ablationChart = new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels: folds,
+        datasets: [
+          { label: 'without',
+            data: ab.per_fold_sharpe_without,
+            backgroundColor: 'rgba(122, 134, 153, 0.6)',
+            borderColor: '#7a8699', borderWidth: 1 },
+          { label: 'with rskew',
+            data: ab.per_fold_sharpe_with,
+            backgroundColor: 'rgba(77, 163, 255, 0.6)',
+            borderColor: '#4da3ff', borderWidth: 1 },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        scales: {
+          x: { ticks: { color: '#7a8699' }, grid: { display: false } },
+          y: { title: { display: true, text: 'fold Sharpe', color: '#7a8699' },
+               ticks: { color: '#7a8699' }, grid: { color: 'rgba(31, 42, 58, 0.6)' } },
+        },
+        plugins: {
+          legend: { labels: { color: '#d7e0ea', boxWidth: 10, boxHeight: 10 } },
+          tooltip: {
+            callbacks: {
+              afterBody: (items) => {
+                const i = items[0]?.dataIndex;
+                if (i == null) return '';
+                const lift = ab.per_fold_lift ? ab.per_fold_lift[i] : null;
+                return lift == null ? '' : `lift = ${lift >= 0 ? '+' : ''}${lift.toFixed(3)}`;
+              },
+            },
+          },
+        },
+      },
+    });
+    const liftStr = (ab.lift_mean >= 0 ? '+' : '') + Number(ab.lift_mean).toFixed(3);
+    const winN = Math.round((ab.win_rate || 0) * (ab.n_splits || folds.length));
+    const mark = pass ? '✓' : '✗';
+    stats.textContent = `lift = ${liftStr}   ·   wins ${winN}/${ab.n_splits || folds.length}   ·   gate2 ${mark}`;
+    stats.className = 'card-stats ' + (pass ? 'pos' : 'neg');
   },
 };
 
@@ -776,6 +919,9 @@ function setView(view) {
   document.getElementById('session-controls').style.display = isAn ? 'none' : '';
   document.getElementById('analytics-controls').style.display = isAn ? '' : 'none';
   if (isAn) {
+    // Ensure init runs before refreshFiles touches this.$file / this.$col
+    // (button click can race ahead of the main init IIFE's awaits).
+    analytics.init();
     analytics.refreshFiles().then(() => analytics.loadCurrent());
   }
 }
@@ -787,11 +933,14 @@ document.getElementById('view-analytics').addEventListener('click', () => setVie
 
 (async function init() {
   readHash();
+  // Wire analytics controls synchronously, before any awaits — otherwise a
+  // fast click on the "Analytics" tab can race past the awaits below and
+  // hit refreshFiles() while this.$file is still undefined.
+  analytics.init();
   await loadSplits();
   $split.value = state.split;
   await loadSessions();
   await loadSession();
   await refreshFeatures();
-  await analytics.init();
   connectSSE();
 })();

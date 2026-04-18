@@ -35,12 +35,25 @@ body {
 
 .topbar {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 16px 10px;
   background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 100%);
   border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
+}
+.topbar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.topbar-row.row-primary {
+  /* brand + view toggle + hotkeys (pushed right via margin-left:auto on .hotkeys) */
+}
+.topbar-row.row-controls {
+  /* active view's controls; single row, no wrap */
+  flex-wrap: nowrap;
+  overflow: hidden;
 }
 
 .brand {
@@ -305,7 +318,14 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+/* Meta chips get to shrink and clip rather than force controls onto a new row. */
+.control-group .meta {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
 }
 
 /* ── analytics layout ────────────────────────────────── */
@@ -382,6 +402,10 @@ body {
 }
 .kv-table td.num { text-align: right; color: var(--text); }
 .kv-table tr:last-child td { border-bottom: none; }
+.kv-table tr.neg td { color: var(--neg); }
+.kv-table tr.pos td { color: var(--pos); }
+.card-stats.pos { color: var(--pos); }
+.card-stats.neg { color: var(--neg); }
 
 /* ── scrollbars (webkit) ─────────────────────────────── */
 
