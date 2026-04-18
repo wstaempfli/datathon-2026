@@ -20,6 +20,9 @@ Usage:
 
 import numpy as np
 import pandas as pd
+from sklearn.model_selection import KFold
+
+from src.models import apply_position_sizing
 
 
 # ---------------------------------------------------------------------------
@@ -44,10 +47,15 @@ def compute_sharpe(
     - run_baselines()    (baseline computation)
     - notebooks          (ad-hoc analysis)
     """
-    # TODO: Compute per-session PnL
-    # TODO: Return mean(pnl) / std(pnl) * 16, handle std==0 edge case
-    raise NotImplementedError
+    returns = end_close / halfway_close - 1
+    pnl = positions * returns
 
+    std = pnl.std()
+    if std == 0:
+        return 0.0
+    
+    return pnl.mean() / std * 16
+    
 
 def compute_direction_accuracy(predictions: np.ndarray, actual_returns: np.ndarray) -> float:
     """Fraction of sessions where sign(prediction) == sign(actual_return).
@@ -55,8 +63,7 @@ def compute_direction_accuracy(predictions: np.ndarray, actual_returns: np.ndarr
     Always-long baseline accuracy = 57.0% (the positive drift rate).
     We need > 57% to beat it.
     """
-    # TODO: Compare signs, return fraction correct
-    raise NotImplementedError
+    return (np.sign(predictions) == np.sign(actual_returns)).mean()
 
 
 # ---------------------------------------------------------------------------
@@ -109,22 +116,58 @@ def cross_validate(
     NOTE: Sessions are independent synthetic stocks — random KFold is
     appropriate (no temporal leakage concern).
     """
-    # TODO: Loop over n_seeds
-    #   TODO: Create KFold(n_splits, shuffle=True, random_state=seed)
-    #   TODO: For each fold:
-    #     TODO: Split X, y into train/test
-    #     TODO: Fit model = model_fn(X_train, y_train)
-    #     TODO: raw_pred = model.predict(X_test)
-    #     TODO: positions = apply_position_sizing(raw_pred, sizing_strategy, **sizing_kwargs)
-    #     TODO: fold_sharpe = compute_sharpe(positions, ..., y_test)
-    #          NOTE: For CV, we can simplify since halfway_close cancels out
-    #          when positions use sign-only sizing.  PnL = positions * y_test.
-    #          sharpe = mean(pnl) / std(pnl) * 16
-    #     TODO: fold_accuracy = compute_direction_accuracy(raw_pred, y_test)
-    #   TODO: Average fold Sharpes for this seed
-    # TODO: Aggregate across seeds: mean, std of per-seed Sharpes
-    # TODO: Return results dict
-    raise NotImplementedError
+    sizing_kwargs = sizing_kwargs or {}
+
+    sharpe_per_seed = []
+    accuracy_per_seed = []
+    per_fold_details = []
+
+    for seed in range(n_seeds):
+        kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+        fold_sharpes = []
+        fold_accuracies = []
+
+        for fold_ix, (train_idx, test_idx) in enumerate(kf.split(X)):
+            X_train, X_test = X[train_idx], X[test_idx]
+            y_train, y_test = y[train_idx], y[test_idx]
+
+            model = model_fn(X_train, y_train)
+            raw_pred = model.predict(X_test)
+
+            positions = apply_position_sizing(raw_pred, strategy=sizing_strategy, **sizing_kwargs)
+
+            pnl = positions * y_test
+            if pnl.std() > 0:
+                fold_sharpe = pnl.mean() / pnl.std() * 16
+            else:
+                fold_sharpe = 0.0
+            
+            fold_accuracy = compute_direction_accuracy(raw_pred, y_test)
+
+            fold_sharpes.append(fold_sharpe)
+            fold_accuracies.append(fold_accuracy)
+            per_fold_details.append({
+                "seed": seed,
+                "fold": fold_ix,
+                "sharpe": fold_sharpe,
+                "accuracy": fold_accuracy,
+                "n_test": len(test_idx),
+            })
+        
+        sharpe_per_seed.append(np.mean(fold_sharpes))
+        accuracy_per_seed.append(np.mean(fold_accuracies))
+
+    sharpe_per_seed = np.array(sharpe_per_seed)
+
+    return {
+        "sharpe_mean": float(sharpe_per_seed.mean()),
+        "sharpe_std": float(sharpe_per_seed.std()),
+        "sharpe_per_seed": sharpe_per_seed.tolist(),
+        "accuracy_mean": float(np.mean(accuracy_per_seed)),
+        "per_fold_details": per_fold_details,
+    }
+
+    
 
 
 # ---------------------------------------------------------------------------
@@ -151,12 +194,33 @@ def run_baselines(y: np.ndarray) -> pd.DataFrame:
     - scripts/run_pipeline.py  (print baselines at start)
     - notebooks/01_eda.ipynb   (comparison table)
     """
-    # TODO: Always-long: pnl = 1.0 * y, compute Sharpe
-    # TODO: Random: pnl = random_sign * y, compute Sharpe (avg over many seeds)
-    # TODO: Return DataFrame with strategy name, Sharpe, accuracy
-    # NOTE: Momentum and mean-reversion need first_half_return from features.
-    #       Either accept it as a parameter or compute from bars here.
-    raise NotImplementedError
+    # Always long
+    pnl_long = 1.0 * y
+    sharpe_long = pnl_long.mean() / pnl_long.std() * 16
+    acc_long = (y > 0).mean()
+
+    # Always short
+    pnl_short = -1.0 * y
+    sharpe_short = pnl_short.mean() / pnl_short.std() * 16
+    acc_short = (y < 0).mean()
+
+    # Random
+    rng = np.random.default_rng(0)
+    random_sharpes = []
+    for _ in range(50):
+        positions = rng.choice([-1, 1], size=len(y))
+        pnl = positions * y
+        if pnl.std() > 0:
+            random_sharpes.append(pnl.mean() / pnl.std() * 16)
+    sharpe_random = np.mean(random_sharpes)
+    acc_random = 0.5
+
+    return pd.DataFrame({
+        "strategy": ["always_long", "always_short", "random"],
+        "sharpe": [sharpe_long, sharpe_short, sharpe_random],
+        "direction_accuracy": [acc_long, acc_short, acc_random],
+    })
+
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +244,12 @@ def compare_models(results: dict[str, dict]) -> pd.DataFrame:
     - scripts/leaderboard.py   (display leaderboard)
     - scripts/run_pipeline.py  (summary output)
     """
-    # TODO: Extract sharpe_mean, sharpe_std, accuracy_mean from each result
-    # TODO: Return sorted DataFrame
-    raise NotImplementedError
+    rows = []
+    for name, res in results.items():
+        rows.append({
+            "model": name,
+            "sharpe_mean": res["sharpe_mean"],
+            "sharpe_std": res["sharpe_std"],
+            "accuracy_mean": res["accuracy_mean"],
+        })
+    return pd.DataFrame(rows).sort_values("sharpe_mean", ascending=False).reset_index(drop=True)

@@ -170,13 +170,16 @@ def apply_position_sizing(
     - src/evaluate.py          (inside CV to compute Sharpe)
     - src/submit.py            (test predictions → positions)
     """
-    # TODO: Implement each strategy branch
-    # TODO: "sign" → np.sign(predictions)
     # TODO: "asymmetric" → +1 if pred>0 else -short_scale
     # TODO: "logistic" → 2 * probabilities - 1
     # TODO: "clipped" → np.clip(predictions * scale, -max_pos, max_pos)
     # TODO: "quantile" → rank predictions, bin into 5 buckets
-    raise NotImplementedError
+    predictions = np.asarray(predictions)
+
+    if strategy == "sign":
+        return np.sign(predictions)
+    
+    raise ValueError(f"Unknown sizing strategy: {strategy!r}")
 
 
 # ---------------------------------------------------------------------------

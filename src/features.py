@@ -161,7 +161,9 @@ def get_target(bars_seen: pd.DataFrame, bars_unseen: pd.DataFrame) -> pd.Series:
     # TODO: halfway_close = bars_seen grouped by session, last close (bar 49)
     # TODO: end_close = bars_unseen grouped by session, last close (bar 99)
     # TODO: return end_close / halfway_close - 1
-    raise NotImplementedError
+    halfway_close = get_halfway_close(bars_seen)
+    end_close = get_halfway_close(bars_unseen)
+    return end_close / halfway_close - 1
 
 
 def get_halfway_close(bars_seen: pd.DataFrame) -> pd.Series:
@@ -174,5 +176,5 @@ def get_halfway_close(bars_seen: pd.DataFrame) -> pd.Series:
     - src/evaluate.py  (Sharpe calculation)
     - src/submit.py    (sanity checks)
     """
-    # TODO: Group by session, take last close value
-    raise NotImplementedError
+    idx = bars_seen.groupby("session")["bar_ix"].idxmax()
+    return bars_seen.loc[idx].set_index("session")["close"]
