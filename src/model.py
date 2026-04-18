@@ -14,9 +14,8 @@ from sklearn.preprocessing import StandardScaler
 ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = ROOT / "models"
 
-# Phase 3A sweep: QuantileRegressor at the median directly targets what Sharpe
-# penalizes — absolute deviation in PnL — rather than squared error. CV Sharpe
-# 2.676 ± 0.572 on price5+gate1top10 (15 features).
+# QuantileRegressor at the median targets absolute deviation, which aligns with
+# Sharpe's penalty on PnL dispersion better than squared error.
 DEFAULT_PARAMS = {
     "quantile": 0.5,
     "alpha": 0.01,
@@ -43,23 +42,6 @@ def _make_pipeline(params: dict) -> Pipeline:
     )
 
 
-def _accumulate_importance(
-    models: list[Pipeline], feature_names: list[str]
-) -> dict:
-    """Average |coef| across CV folds as a proxy for feature importance."""
-    agg = np.zeros(len(feature_names), dtype=float)
-    for m in models:
-        coef = np.abs(np.asarray(m.named_steps["est"].coef_, dtype=float))
-        if coef.shape[0] != len(feature_names):
-            padded = np.zeros(len(feature_names), dtype=float)
-            padded[: coef.shape[0]] = coef
-            coef = padded
-        agg += coef
-    if models:
-        agg /= len(models)
-    return {n: float(v) for n, v in zip(feature_names, agg)}
-
-
 def train_cv(
     X: pd.DataFrame,
     y: pd.Series,
@@ -69,9 +51,8 @@ def train_cv(
 ) -> tuple[list[Pipeline], np.ndarray, dict]:
     """Cross-validated QuantileRegressor (median) training.
 
-    Returns (models, oof_preds, metrics) with per-fold RMSE, per-fold Sharpe
-    on raw predictions used as positions, plus CV aggregates and mean |coef|
-    feature importance.
+    Returns (models, oof_preds, metrics) with per-fold RMSE and Sharpe on raw
+    predictions used as positions, plus CV aggregates.
     """
     if params is None:
         params = dict(DEFAULT_PARAMS)
@@ -82,7 +63,6 @@ def train_cv(
 
     assert X.index.equals(y.index), "X and y must share the same index"
 
-    feature_names = list(X.columns)
     X_vals = X.values
     y_vals = y.values.astype(float)
 
@@ -102,14 +82,10 @@ def train_cv(
 
         rmse = float(np.sqrt(mean_squared_error(y_vals[va_idx], preds)))
         s_raw = sharpe(preds * y_vals[va_idx])
-
         per_fold_rmse.append(rmse)
         per_fold_sharpe_raw.append(s_raw)
 
-        print(
-            f"[fold {fold + 1}/{n_splits}] rmse={rmse:.5f}  "
-            f"sharpe_raw={s_raw:.3f}"
-        )
+        print(f"[fold {fold + 1}/{n_splits}] rmse={rmse:.5f}  sharpe_raw={s_raw:.3f}")
 
     cv_rmse = float(np.sqrt(mean_squared_error(y_vals, oof)))
 
@@ -120,8 +96,6 @@ def train_cv(
     rmse_mean, rmse_std = _mean_std(per_fold_rmse)
     sraw_mean, sraw_std = _mean_std(per_fold_sharpe_raw)
 
-    fi = _accumulate_importance(models, feature_names)
-
     metrics: dict = {
         "per_fold_rmse": per_fold_rmse,
         "per_fold_sharpe_raw": per_fold_sharpe_raw,
@@ -131,7 +105,6 @@ def train_cv(
         "sharpe_raw_std": sraw_std,
         "cv_rmse": cv_rmse,
         "cv_sharpe_raw": sharpe(oof * y_vals),
-        "feature_importance_gain": fi,
     }
 
     print(

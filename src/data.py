@@ -1,5 +1,6 @@
-import pandas as pd
 from pathlib import Path
+
+import pandas as pd
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
@@ -21,21 +22,4 @@ def compute_targets() -> pd.DataFrame:
     unseen = load_bars("train", seen=False)
     half = seen.sort_values(["session", "bar_ix"]).groupby("session").last()["close"]
     end = unseen.sort_values(["session", "bar_ix"]).groupby("session").last()["close"]
-    r = (end / half - 1.0).rename("target_return").reset_index()
-    return r
-
-
-def all_unique_headlines() -> list[str]:
-    """Deduplicated headlines across every available split (seen + unseen-train)."""
-    frames = []
-    for split in ("train", "public_test", "private_test"):
-        frames.append(load_headlines(split, seen=True))
-    frames.append(load_headlines("train", seen=False))
-    all_h = (
-        pd.concat(frames, ignore_index=True)["headline"]
-        .dropna()
-        .astype(str)
-        .unique()
-        .tolist()
-    )
-    return all_h
+    return (end / half - 1.0).rename("target_return").reset_index()

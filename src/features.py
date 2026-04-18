@@ -1,39 +1,12 @@
 """Per-session feature engineering for the Zurich Datathon 2026 challenge.
 
-This module is the single source of truth for the feature matrix consumed by
-`src/model.py`. As of v10 it exposes 15 columns: 5 live price-derived features
-computed inline plus 10 Gate-1 PASS features joined from ``features/*.parquet``.
+Builds the 14-column feature matrix consumed by `src/model.py` from seen bars
+(0..49), headlines, and the FinBERT sentiment cache. No parquet feature store
+is required at runtime — every feature is computed inline.
 
 Public surface:
-    - make_features(bars_seen, headlines_seen, sentiment_cache, training_stats=None)
-      -> (X, feature_names, fitted_stats)
-    - validate_no_leakage(X) -> None
-
-Target construction lives in `src.data.compute_targets()` — deliberately *not*
-returned from `make_features` so there is a single source of truth and so the
-function can be called identically for train and test (test has no target).
-
-# --------------------------------------------------------------------------
-# NaN-policy template (fill in as features are added)
-# --------------------------------------------------------------------------
-# PRICE features         : default fill 0.0 unless noted below
-#   - fh_return          : fill 0.0 when open[0] or close[49] is missing or zero
-#   - yz_vol             : fill 0.0 when variance components are NaN (degenerate / constant-price sessions)
-#   - close_pos_in_range : fill 0.5 (midpoint) when high == low
-#   - wick_asymmetry     : fill 1.0 (neutral) when denominator is zero
-#   - rsi_at_halftime    : fill 50.0 (neutral) when insufficient data
-# CROSS-SESSION features : default fill 0.0 unless noted below
-#   - vol_percentile     : fill 0.5 (median) for edge cases
-# NLP features           : fill 0.0 when sentiment cache has no coverage
-# INTERACTION features   : fill 0.0 (composed from already-filled inputs)
-# GATE-1 parquet features: fill 0.0 when a session is missing from the parquet
-#                          (e.g., sessions with no headlines for sentiment cols).
-#                          Source parquets are already produced by Phase 1 with
-#                          their own per-feature imputation; this fill handles
-#                          only the left-join miss case.
-#
-# Invariant: X.isna().sum().sum() == 0 before return.
-# --------------------------------------------------------------------------
+    make_features(bars, headlines, sentiment_cache=None) -> (X, feature_names)
+    validate_no_leakage(X) -> None
 """
 from __future__ import annotations
 
@@ -42,255 +15,287 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# Resolve features/ dir relative to this file so the pipeline works regardless
-# of CWD (matches scripts/sweep_tree.py's resolution).
-_FEATURES_DIR = Path(__file__).resolve().parent.parent / "features"
+_ROOT = Path(__file__).resolve().parent.parent
+_SENTIMENT_CACHE_PATH = _ROOT / "features" / "sentiment_cache.parquet"
+_N_BARS = 50
 
-# Gate-1 top-10 features by |pearson_r| (all-splits PASS), preserved in the
-# exact order declared in submissions/phase3a_features.txt so the production
-# pipeline produces bit-identical predictions vs the Phase 3A sweep.
-_GATE1_TOP10: tuple[str, ...] = (
+# Frozen output column order.
+FEATURE_NAMES: tuple[str, ...] = (
+    "_const",
+    "fh_return",
+    "yz_vol",
+    "recent_return_3",
+    "upper_wick_49",
     "max_drawdown_fh",
     "garman_klass_vol",
     "rogers_satchell_vol",
     "parkinson_vol",
+    "realized_skewness",
+    "rsi_14",
     "sent_sma10",
     "sent_ema20",
-    "realized_skewness",
     "sent_wt_decay20",
-    "rsi_14",
-    "embed_pca_recency_1",
 )
 
 # Substrings that would indicate a column leaks unseen/second-half information.
 _LEAK_SUBSTRINGS: tuple[str, ...] = (
-    "unseen",
-    "future",
-    "second_half",
-    # Anything referencing bars 50-99: bar_5?, bar_6?, bar_7?, bar_8?, bar_9?
-    "bar_5",
-    "bar_6",
-    "bar_7",
-    "bar_8",
-    "bar_9",
+    "unseen", "future", "second_half",
+    "bar_5", "bar_6", "bar_7", "bar_8", "bar_9",
 )
 
 
-def _yang_zhang_vol(bars_seen: pd.DataFrame) -> pd.Series:
-    """Yang-Zhang volatility over all seen bars per session.
+# ---- price helpers --------------------------------------------------------
 
-    Drift-independent OHLC volatility estimator. For 50 bars:
-      V_o  = var( ln(O_i / C_{i-1}) )       # bar-to-bar gap, skips bar 0
-      V_c  = var( ln(C_i / O_i) )           # intraday open-to-close
-      V_rs = mean( u(u-c) + d(d-c) )        # Rogers-Satchell, u=ln(H/O), d=ln(L/O)
-      k    = 0.34 / (1.34 + (n+1)/(n-1))    # n = gap returns = 49
-      yz   = sqrt(V_o + k*V_c + (1-k)*V_rs)
+def _pivot_close(bars: pd.DataFrame, sessions: pd.Index) -> pd.DataFrame:
+    """Rows = session, cols = bar_ix 0..49, values = close."""
+    return (
+        bars.pivot(index="session", columns="bar_ix", values="close")
+        .reindex(index=sessions, columns=range(_N_BARS))
+    )
 
-    Reference: Yang & Zhang (2000), Journal of Business 73:477.
+
+def _yz_vol(bars: pd.DataFrame, sessions: pd.Index) -> pd.Series:
+    """Yang-Zhang (2000) drift-independent OHLC volatility over bars 0..49.
+
+    yz = sqrt(V_o + k*V_c + (1-k)*V_rs), where
+        V_o  = var(ln(O_i / C_{i-1}))           # gap, skips bar 0
+        V_c  = var(ln(C_i / O_i))               # intraday open-to-close
+        V_rs = mean(u(u-c) + d(d-c))            # u=ln(H/O), d=ln(L/O), c=ln(C/O)
+        k    = 0.34 / (1.34 + (n+1)/(n-1)),  n = 49
     """
-    b = bars_seen.sort_values(["session", "bar_ix"]).copy()
+    b = bars.sort_values(["session", "bar_ix"]).copy()
     b["close_prev"] = b.groupby("session")["close"].shift(1)
-    b["o"] = np.log(b["open"]  / b["close_prev"])
+    b["o"] = np.log(b["open"] / b["close_prev"])
     b["c"] = np.log(b["close"] / b["open"])
-    b["u"] = np.log(b["high"]  / b["open"])
-    b["d"] = np.log(b["low"]   / b["open"])
-
+    b["u"] = np.log(b["high"] / b["open"])
+    b["d"] = np.log(b["low"] / b["open"])
     g = b.groupby("session")
-    v_o  = g["o"].var(ddof=1)
-    v_c  = g["c"].var(ddof=1)
+    v_o = g["o"].var(ddof=1)
+    v_c = g["c"].var(ddof=1)
     v_rs = g.apply(lambda df: (df["u"] * (df["u"] - df["c"])
                                + df["d"] * (df["d"] - df["c"])).mean())
-
     n = 49
     k = 0.34 / (1.34 + (n + 1) / (n - 1))
-    return np.sqrt(v_o + k * v_c + (1 - k) * v_rs).rename("yz_vol")
+    return np.sqrt(v_o + k * v_c + (1 - k) * v_rs).reindex(sessions).fillna(0.0)
 
 
-def _load_gate1_feature(name: str, session_index: pd.Index) -> pd.Series:
-    """Load a Gate-1 parquet column and align to ``session_index`` (0-fill misses).
+def _parkinson_vol(bars: pd.DataFrame, sessions: pd.Index) -> pd.Series:
+    """sqrt( mean(log(H/L)^2) / (4 ln 2) )."""
+    hl = np.log(np.where(bars["low"] > 0, bars["high"] / bars["low"], 1.0))
+    mean_hl2 = bars[["session"]].assign(hl2=hl ** 2).groupby("session")["hl2"].mean()
+    return np.sqrt(mean_hl2 / (4.0 * np.log(2.0))).reindex(sessions).fillna(0.0)
 
-    The Phase 1 parquets live at ``features/<name>.parquet`` and cover all
-    21,000 sessions (train + public_test + private_test) with columns
-    ``[session, <name>, ...]``. We project to the requested split's sessions
-    and zero-fill any missing values — e.g., sentiment columns for sessions
-    that have no headlines at all. The source parquets are already imputed by
-    the Phase 1 producer; this handles the left-join miss case only.
+
+def _garman_klass_vol(bars: pd.DataFrame, sessions: pd.Index) -> pd.Series:
+    """sqrt( mean( 0.5*log(H/L)^2 - (2 ln 2 - 1)*log(C/O)^2 ) )."""
+    hl = np.log(np.where(bars["low"] > 0, bars["high"] / bars["low"], 1.0))
+    co = np.log(np.where(bars["open"] > 0, bars["close"] / bars["open"], 1.0))
+    term = 0.5 * hl ** 2 - (2 * np.log(2.0) - 1.0) * co ** 2
+    mean_term = bars[["session"]].assign(t=term).groupby("session")["t"].mean().clip(lower=0.0)
+    return np.sqrt(mean_term).reindex(sessions).fillna(0.0)
+
+
+def _rogers_satchell_vol(bars: pd.DataFrame, sessions: pd.Index) -> pd.Series:
+    """sqrt( mean( log(H/C)*log(H/O) + log(L/C)*log(L/O) ) )."""
+    safe_o = np.where(bars["open"] > 0, bars["open"], 1.0)
+    safe_c = np.where(bars["close"] > 0, bars["close"], 1.0)
+    hc = np.log(bars["high"] / safe_c)
+    ho = np.log(bars["high"] / safe_o)
+    lc = np.log(bars["low"] / safe_c)
+    lo = np.log(bars["low"] / safe_o)
+    term = hc * ho + lc * lo
+    mean_term = bars[["session"]].assign(t=term).groupby("session")["t"].mean().clip(lower=0.0)
+    return np.sqrt(mean_term).reindex(sessions).fillna(0.0)
+
+
+def _max_drawdown_fh(close_pivot: pd.DataFrame) -> pd.Series:
+    """min over t of close[t]/cummax(close[0..t]) - 1 (most-negative drawdown)."""
+    arr = close_pivot.to_numpy()
+    cummax = np.maximum.accumulate(arr, axis=1)
+    dd = np.where(cummax > 0, arr / cummax - 1.0, 0.0)
+    return pd.Series(dd.min(axis=1), index=close_pivot.index).fillna(0.0)
+
+
+def _realized_skewness(close_pivot: pd.DataFrame) -> pd.Series:
+    """Scipy-free skew of log-returns over bars 0..48.
+
+    ((x - mean)^3).mean() / std^3, with bias-corrected (ddof=1) std.
     """
-    path = _FEATURES_DIR / f"{name}.parquet"
-    df = pd.read_parquet(path, columns=["session", name])
-    s = df.set_index("session")[name].reindex(session_index)
-    s = s.replace([np.inf, -np.inf], np.nan).fillna(0.0).astype(float)
-    return s.rename(name)
+    arr = close_pivot.to_numpy()
+    safe = np.where(arr > 0, arr, np.nan)
+    lr = np.log(safe[:, 1:] / safe[:, :-1])
+    lr = np.nan_to_num(lr, nan=0.0, posinf=0.0, neginf=0.0)
+    m = lr.mean(axis=1, keepdims=True)
+    std = lr.std(axis=1, ddof=1)
+    centered_cubed = ((lr - m) ** 3).mean(axis=1)
+    skew = np.divide(
+        centered_cubed, std ** 3,
+        out=np.zeros_like(centered_cubed),
+        where=std > 1e-18,
+    )
+    skew = np.nan_to_num(skew, nan=0.0, posinf=0.0, neginf=0.0)
+    return pd.Series(skew, index=close_pivot.index)
 
+
+def _rsi_14(close_pivot: pd.DataFrame) -> pd.Series:
+    """Wilder's 14-bar RSI at bar 49.
+
+    Seed avg_gain/avg_loss with the simple mean of the first 14 diffs, then
+    apply Wilder smoothing (alpha = 1/14). 50.0 default on flat sessions.
+    """
+    arr = close_pivot.to_numpy()
+    diff = np.diff(arr, axis=1)
+    up = np.where(diff > 0, diff, 0.0)
+    down = np.where(diff < 0, -diff, 0.0)
+    period = 14
+    avg_up = up[:, :period].mean(axis=1)
+    avg_down = down[:, :period].mean(axis=1)
+    alpha = 1.0 / period
+    for i in range(period, diff.shape[1]):
+        avg_up = avg_up * (1 - alpha) + up[:, i] * alpha
+        avg_down = avg_down * (1 - alpha) + down[:, i] * alpha
+    rs = np.divide(avg_up, avg_down, out=np.zeros_like(avg_up),
+                   where=avg_down > 1e-18)
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    flat = (avg_up == 0) & (avg_down == 0)
+    rsi = np.where(flat, 50.0, rsi)
+    rsi = np.nan_to_num(rsi, nan=50.0, posinf=100.0, neginf=0.0)
+    return pd.Series(rsi, index=close_pivot.index)
+
+
+# ---- sentiment helpers ----------------------------------------------------
+
+def _bar_sentiment_matrix(
+    headlines: pd.DataFrame,
+    sentiment_cache: pd.DataFrame,
+    sessions: pd.Index,
+) -> np.ndarray:
+    """Shape (n_sessions, 50) of per-bar mean sent_score (0 if no headline)."""
+    cache = sentiment_cache[["headline", "sent_score"]]
+    merged = headlines.merge(cache, on="headline", how="left")
+    merged["sent_score"] = merged["sent_score"].fillna(0.0)
+    grp = (
+        merged.groupby(["session", "bar_ix"], sort=False)["sent_score"]
+        .mean()
+        .reset_index()
+    )
+    sess_to_idx = {s: i for i, s in enumerate(sessions.tolist())}
+    S = np.zeros((len(sessions), _N_BARS), dtype=np.float64)
+    grp = grp[(grp["bar_ix"] >= 0) & (grp["bar_ix"] < _N_BARS)
+              & grp["session"].isin(sess_to_idx)]
+    if len(grp):
+        rows = grp["session"].map(sess_to_idx).to_numpy()
+        cols = grp["bar_ix"].to_numpy()
+        S[rows, cols] = grp["sent_score"].to_numpy(dtype=np.float64)
+    return S
+
+
+def _sent_ema20(S: np.ndarray) -> np.ndarray:
+    """Last-bar value of pd.Series(S).ewm(span=20, adjust=False).mean()."""
+    alpha = 2.0 / 21.0
+    out = S[:, 0].astype(np.float64).copy()
+    for t in range(1, S.shape[1]):
+        out = alpha * S[:, t] + (1.0 - alpha) * out
+    return out
+
+
+def _sent_wt_decay20(S: np.ndarray) -> np.ndarray:
+    """sum_b s[b] * exp(-(49 - b)/20)."""
+    bars = np.arange(_N_BARS)
+    w = np.exp(-(_N_BARS - 1 - bars) / 20.0)
+    return S @ w
+
+
+# ---- public API -----------------------------------------------------------
 
 def make_features(
-    bars_seen: pd.DataFrame,
-    headlines_seen: pd.DataFrame,
-    sentiment_cache: pd.DataFrame,
-    training_stats: dict | None = None,
-) -> tuple[pd.DataFrame, list[str], dict]:
-    """Build a per-session feature matrix from seen bars, headlines, and sentiment.
-
-    Fit mode (``training_stats=None``): compute any cross-session statistics
-    needed (decile bin edges, vol distribution, bucket means, etc.) and return
-    them as ``fitted_stats`` so they can be reused at inference.
-
-    Apply mode (``training_stats=<dict>``): use the provided stats verbatim;
-    never re-fit anything on test data.
-
-    The current baseline is an empty scaffold: X has a single ``_const`` column
-    of zeros so the model pipeline runs end-to-end. Real features land here as
-    the researcher confirms signal in `src/signals.md`.
+    bars: pd.DataFrame,
+    headlines: pd.DataFrame,
+    sentiment_cache: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, list[str]]:
+    """Build the 14-column per-session feature matrix.
 
     Args:
-        bars_seen: First-half OHLC bars with columns
-            [session, bar_ix, open, high, low, close]. bar_ix must be in 0..49.
-        headlines_seen: Headlines for seen bars with columns
-            [session, bar_ix, headline].
-        sentiment_cache: FinBERT-scored headlines with columns
-            [headline, pos, neg, neu, sent_score].
-        training_stats: None during training; the dict returned from a previous
-            training call during inference.
+        bars: Seen OHLC bars [session, bar_ix, open, high, low, close], bar_ix 0..49.
+        headlines: [session, bar_ix, headline] for the seen bars.
+        sentiment_cache: FinBERT-scored cache [headline, ..., sent_score]. If None,
+            loads from features/sentiment_cache.parquet.
 
     Returns:
-        X: DataFrame indexed by session, columns = feature_names.
-        feature_names: list[str] equal to ``list(X.columns)``.
-        fitted_stats: dict of fitted cross-session statistics. Empty during the
-            scaffolding stage; pass-through of ``training_stats`` when provided.
+        X indexed by session with columns matching FEATURE_NAMES, and the column list.
     """
-    sessions = np.sort(bars_seen["session"].unique())
-    session_index = pd.Index(sessions, name="session")
+    if sentiment_cache is None:
+        sentiment_cache = pd.read_parquet(_SENTIMENT_CACHE_PATH)
 
-    # ------------------------------------------------------------------
-    # PRICE FEATURES (per-session, computed from seen bars only)
-    # ------------------------------------------------------------------
-    # fh_return: first-half return from seen bars only. Uses bar 0's open and
-    # bar 49's close. Mean-reverting sign against target (r ~= -0.07, p ~= 0.02).
-    opens = bars_seen.loc[bars_seen["bar_ix"] == 0].set_index("session")["open"]
-    closes = bars_seen.loc[bars_seen["bar_ix"] == 49].set_index("session")["close"]
-    fh_return = (closes / opens.replace(0.0, np.nan) - 1.0).reindex(session_index)
-    fh_return = fh_return.fillna(0.0)
+    sessions = pd.Index(np.sort(bars["session"].unique()), name="session")
+    close_pivot = _pivot_close(bars, sessions)
 
-    # yz_vol: Yang-Zhang (2000) drift-independent OHLC volatility over bars 0-49.
-    # Gate 1 |r|=0.079, MI=0.0092 vs target; Gate 2 CV Sharpe lift +0.12 (4/5 folds);
-    # Gate 3 Wasserstein = 2% of train std (very stable across splits).
-    yz_vol = _yang_zhang_vol(bars_seen).reindex(session_index).fillna(0.0)
-
-    # recent_return_3: close[49]/close[46] - 1. Late-session 3-bar momentum
-    # (continuation signal, opposite sign to fh_return's reversion).
-    close_pivot = (
-        bars_seen.pivot(index="session", columns="bar_ix", values="close")
-        .reindex(session_index)
-    )
-    c46 = close_pivot[46].replace(0.0, np.nan)
+    # fh_return = close[49]/close[0] - 1
+    c0 = close_pivot[0].replace(0.0, np.nan)
     c49 = close_pivot[49]
+    fh_return = (c49 / c0 - 1.0).fillna(0.0)
+
+    # recent_return_3 = close[49]/close[46] - 1
+    c46 = close_pivot[46].replace(0.0, np.nan)
     recent_return_3 = (c49 / c46 - 1.0).fillna(0.0)
 
-    # upper_wick_49: upper-wick ratio at bar 49. (high - max(open, close)) / (high - low).
-    # Candlestick rejection / late-session buying pressure proxy. r ~= +0.065 vs target.
-    bar49 = bars_seen.loc[bars_seen["bar_ix"] == 49].set_index("session")
-    hi = bar49["high"].reindex(session_index)
-    lo = bar49["low"].reindex(session_index)
-    op = bar49["open"].reindex(session_index)
-    cl = bar49["close"].reindex(session_index)
-    body_top = np.maximum(op.to_numpy(), cl.to_numpy())
-    range_ = (hi - lo).replace(0.0, np.nan)
-    upper_wick_49 = ((hi - body_top) / range_).fillna(0.0)
+    # upper_wick_49 = (high[49] - max(open[49], close[49])) / (high[49] - low[49])
+    bar49 = bars.loc[bars["bar_ix"] == 49].set_index("session").reindex(sessions)
+    body_top = np.maximum(bar49["open"].to_numpy(), bar49["close"].to_numpy())
+    range_ = (bar49["high"] - bar49["low"]).replace(0.0, np.nan)
+    upper_wick_49 = ((bar49["high"] - body_top) / range_).fillna(0.0)
 
-    # ------------------------------------------------------------------
-    # CROSS-SESSION FEATURES (require training_stats)
-    # ------------------------------------------------------------------
-    # None currently. The Gate-1 parquet features below have no per-fold fit —
-    # embed_pca_recency_1 was fit once in Phase 1A and baked into the parquet;
-    # sentiment MAs are per-session aggregates with no global statistic.
+    S = _bar_sentiment_matrix(headlines, sentiment_cache, sessions)
 
-    # ------------------------------------------------------------------
-    # GATE-1 FEATURES (top-10 by |pearson_r|, joined from features/*.parquet)
-    # ------------------------------------------------------------------
-    # Column order is frozen in ``_GATE1_TOP10`` to match
-    # submissions/phase3a_features.txt, ensuring the integrated pipeline
-    # produces predictions bit-identical to Phase 3A's sweep output.
-    gate1_cols = {
-        name: _load_gate1_feature(name, session_index).to_numpy()
-        for name in _GATE1_TOP10
-    }
+    X = pd.DataFrame(
+        {
+            "_const": np.ones(len(sessions), dtype=float),
+            "fh_return": fh_return.to_numpy(),
+            "yz_vol": _yz_vol(bars, sessions).to_numpy(),
+            "recent_return_3": recent_return_3.to_numpy(),
+            "upper_wick_49": upper_wick_49.to_numpy(),
+            "max_drawdown_fh": _max_drawdown_fh(close_pivot).to_numpy(),
+            "garman_klass_vol": _garman_klass_vol(bars, sessions).to_numpy(),
+            "rogers_satchell_vol": _rogers_satchell_vol(bars, sessions).to_numpy(),
+            "parkinson_vol": _parkinson_vol(bars, sessions).to_numpy(),
+            "realized_skewness": _realized_skewness(close_pivot).to_numpy(),
+            "rsi_14": _rsi_14(close_pivot).to_numpy(),
+            "sent_sma10": S[:, -10:].mean(axis=1),
+            "sent_ema20": _sent_ema20(S),
+            "sent_wt_decay20": _sent_wt_decay20(S),
+        },
+        index=sessions,
+    )[list(FEATURE_NAMES)]
 
-    # ------------------------------------------------------------------
-    # NLP FEATURES (live aggregates from headlines + sentiment_cache)
-    # ------------------------------------------------------------------
-    # The Gate-1 parquets above already include the winning sentiment features
-    # (sent_sma10, sent_ema20, sent_wt_decay20). No additional live aggregates
-    # are pulled in here — they failed Gate 1 or are redundant.
-
-    # ------------------------------------------------------------------
-    # INTERACTION FEATURES (compositions of the above)
-    # ------------------------------------------------------------------
-    # None at v10. Phase 3C cross-product sweep found no interaction that beat
-    # the flat price5+gate1top10 set.
-
-    data = {
-        "_const": np.zeros(len(session_index), dtype=float),
-        "fh_return": fh_return.to_numpy(),
-        "yz_vol": yz_vol.to_numpy(),
-        "recent_return_3": recent_return_3.to_numpy(),
-        "upper_wick_49": upper_wick_49.to_numpy(),
-    }
-    data.update(gate1_cols)
-    X = pd.DataFrame(data, index=session_index)
-    feature_names: list[str] = list(X.columns)
-
-    # Pass-through contract: apply mode returns the stats it was given so callers
-    # can thread a single dict through train/predict without branching.
-    if training_stats is None:
-        fitted_stats: dict = {}
-    else:
-        fitted_stats = training_stats
-
-    # Final invariant: no NaN/inf allowed to leak into the model.
-    assert X.isna().sum().sum() == 0, "make_features produced NaN values"
-    return X, feature_names, fitted_stats
+    # Defensive: replace any inf and NaN with 0.0 before returning.
+    X = X.replace([np.inf, -np.inf], 0.0).fillna(0.0)
+    return X, list(X.columns)
 
 
 def validate_no_leakage(X: pd.DataFrame) -> None:
-    """Raise ValueError if X leaks unseen-bar info or contains NaN/inf.
-
-    Checks column names for substrings that would indicate the feature touched
-    bars 50-99 or any 'future'/'second_half'/'unseen' data, and verifies the
-    matrix is finite and NaN-free. This is a cheap last line of defense — the
-    real leakage prevention lives inside the feature builders themselves.
-
-    Raises:
-        ValueError: with a descriptive message naming the offending column(s)
-            or the kind of invalid values found.
-    """
+    """Raise ValueError if X leaks unseen-bar info or contains NaN/inf."""
     bad_cols = [
-        col
-        for col in X.columns
+        col for col in X.columns
         if any(substr in str(col).lower() for substr in _LEAK_SUBSTRINGS)
     ]
     if bad_cols:
         raise ValueError(
-            "validate_no_leakage: columns reference unseen/second-half data: "
-            f"{bad_cols}. Feature names must not mention bars 50-99, 'unseen', "
-            "'future', or 'second_half'."
+            f"validate_no_leakage: columns reference unseen/second-half data: {bad_cols}."
         )
 
     nan_count = int(X.isna().sum().sum())
     if nan_count > 0:
         nan_cols = X.columns[X.isna().any()].tolist()
         raise ValueError(
-            f"validate_no_leakage: X contains {nan_count} NaN value(s) in "
-            f"columns {nan_cols}. make_features must impute every feature."
+            f"validate_no_leakage: X contains {nan_count} NaN value(s) in columns {nan_cols}."
         )
 
     numeric = X.select_dtypes(include=[np.number])
     if not np.isfinite(numeric.to_numpy()).all():
         inf_cols = [
-            col
-            for col in numeric.columns
+            col for col in numeric.columns
             if not np.isfinite(numeric[col].to_numpy()).all()
         ]
         raise ValueError(
-            "validate_no_leakage: X contains non-finite (inf) values in "
-            f"columns {inf_cols}."
+            f"validate_no_leakage: X contains non-finite (inf) values in columns {inf_cols}."
         )

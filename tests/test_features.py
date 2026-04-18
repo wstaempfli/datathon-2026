@@ -17,15 +17,9 @@ def _synth(
     n_bars: int = 50,
     seed: int = 0,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Generate a tiny synthetic (bars_seen, headlines_seen, sentiment_cache).
-
-    Bars start at 1.0 and walk via small normal returns — realistic enough to
-    exercise log-returns/vol without hitting zeros or negatives. Headlines are
-    sparse (one per session) and the sentiment cache covers them all.
-    """
+    """Generate a tiny synthetic (bars, headlines, sentiment_cache)."""
     rng = np.random.default_rng(seed)
 
-    # ----- bars_seen -----------------------------------------------------
     rows = []
     for s in range(n_sessions):
         price = 1.0
@@ -47,9 +41,8 @@ def _synth(
                     "close": close,
                 }
             )
-    bars_seen = pd.DataFrame(rows)
+    bars = pd.DataFrame(rows)
 
-    # ----- headlines_seen ------------------------------------------------
     headlines = pd.DataFrame(
         [
             {"session": s, "bar_ix": 0, "headline": f"Synthetic headline {s}"}
@@ -57,7 +50,6 @@ def _synth(
         ]
     )
 
-    # ----- sentiment_cache ----------------------------------------------
     sent_rows = []
     for s in range(n_sessions):
         pos = float(rng.uniform(0.0, 1.0))
@@ -74,7 +66,7 @@ def _synth(
         )
     sentiment_cache = pd.DataFrame(sent_rows)
 
-    return bars_seen, headlines, sentiment_cache
+    return bars, headlines, sentiment_cache
 
 
 # --------------------------------------------------------------------------
@@ -83,19 +75,18 @@ def _synth(
 
 
 def test_make_features_returns_correct_types() -> None:
-    bars_seen, headlines_seen, sent = _synth()
-    X, feature_names, fitted_stats = make_features(bars_seen, headlines_seen, sent)
+    bars, headlines, sent = _synth()
+    X, feature_names = make_features(bars, headlines, sentiment_cache=sent)
 
     assert isinstance(X, pd.DataFrame)
     assert isinstance(feature_names, list)
     assert all(isinstance(n, str) for n in feature_names)
-    assert isinstance(fitted_stats, dict)
     assert X.index.name == "session"
 
 
 def test_no_nan_or_inf() -> None:
-    bars_seen, headlines_seen, sent = _synth()
-    X, _, _ = make_features(bars_seen, headlines_seen, sent)
+    bars, headlines, sent = _synth()
+    X, _ = make_features(bars, headlines, sentiment_cache=sent)
 
     assert X.isna().sum().sum() == 0
     numeric = X.select_dtypes(include=[np.number]).to_numpy()
@@ -103,23 +94,22 @@ def test_no_nan_or_inf() -> None:
 
 
 def test_feature_names_match_columns() -> None:
-    bars_seen, headlines_seen, sent = _synth()
-    X, feature_names, _ = make_features(bars_seen, headlines_seen, sent)
+    bars, headlines, sent = _synth()
+    X, feature_names = make_features(bars, headlines, sentiment_cache=sent)
 
     assert list(X.columns) == feature_names
 
 
 def test_validate_no_leakage_passes() -> None:
-    bars_seen, headlines_seen, sent = _synth()
-    X, _, _ = make_features(bars_seen, headlines_seen, sent)
+    bars, headlines, sent = _synth()
+    X, _ = make_features(bars, headlines, sentiment_cache=sent)
 
-    # Should not raise on a valid feature matrix.
     validate_no_leakage(X)
 
 
 def test_validate_no_leakage_rejects_leaky_column() -> None:
-    bars_seen, headlines_seen, sent = _synth()
-    X, _, _ = make_features(bars_seen, headlines_seen, sent)
+    bars, headlines, sent = _synth()
+    X, _ = make_features(bars, headlines, sentiment_cache=sent)
 
     leaky = X.copy()
     leaky["close_bar_55"] = 0.0
@@ -133,40 +123,25 @@ def test_validate_no_leakage_rejects_leaky_column() -> None:
         validate_no_leakage(nan_X)
 
 
-def test_training_stats_roundtrip() -> None:
-    bars_seen, headlines_seen, sent = _synth()
-
-    # Fit mode: stats come back from the function.
-    _, _, fitted = make_features(bars_seen, headlines_seen, sent, training_stats=None)
-    assert isinstance(fitted, dict)
-
-    # Apply mode: contract is pass-through at the baseline.
-    sentinel = {"_sentinel": 1.0}
-    _, _, passed_through = make_features(
-        bars_seen, headlines_seen, sent, training_stats=sentinel
-    )
-    assert passed_through == sentinel
-
-
 def test_fh_return_present_and_named() -> None:
-    bars_seen, headlines_seen, sent = _synth()
-    _, feature_names, _ = make_features(bars_seen, headlines_seen, sent)
+    bars, headlines, sent = _synth()
+    _, feature_names = make_features(bars, headlines, sentiment_cache=sent)
     assert "fh_return" in feature_names
 
 
 def test_fh_return_domain_sane() -> None:
-    bars_seen, headlines_seen, sent = _synth()
-    X, _, _ = make_features(bars_seen, headlines_seen, sent)
+    bars, headlines, sent = _synth()
+    X, _ = make_features(bars, headlines, sentiment_cache=sent)
     assert (X["fh_return"].abs() < 0.5).all()
 
 
 def test_yz_vol_present_and_named() -> None:
-    bars_seen, headlines_seen, sent = _synth()
-    _, feature_names, _ = make_features(bars_seen, headlines_seen, sent)
+    bars, headlines, sent = _synth()
+    _, feature_names = make_features(bars, headlines, sentiment_cache=sent)
     assert "yz_vol" in feature_names
 
 
 def test_yz_vol_nonneg() -> None:
-    bars_seen, headlines_seen, sent = _synth()
-    X, _, _ = make_features(bars_seen, headlines_seen, sent)
+    bars, headlines, sent = _synth()
+    X, _ = make_features(bars, headlines, sentiment_cache=sent)
     assert (X["yz_vol"] >= 0).all()
