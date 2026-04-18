@@ -133,6 +133,27 @@ def make_features(
     # Gate 3 Wasserstein = 2% of train std (very stable across splits).
     yz_vol = _yang_zhang_vol(bars_seen).reindex(session_index).fillna(0.0)
 
+    # recent_return_3: close[49]/close[46] - 1. Late-session 3-bar momentum
+    # (continuation signal, opposite sign to fh_return's reversion).
+    close_pivot = (
+        bars_seen.pivot(index="session", columns="bar_ix", values="close")
+        .reindex(session_index)
+    )
+    c46 = close_pivot[46].replace(0.0, np.nan)
+    c49 = close_pivot[49]
+    recent_return_3 = (c49 / c46 - 1.0).fillna(0.0)
+
+    # upper_wick_49: upper-wick ratio at bar 49. (high - max(open, close)) / (high - low).
+    # Candlestick rejection / late-session buying pressure proxy. r ~= +0.065 vs target.
+    bar49 = bars_seen.loc[bars_seen["bar_ix"] == 49].set_index("session")
+    hi = bar49["high"].reindex(session_index)
+    lo = bar49["low"].reindex(session_index)
+    op = bar49["open"].reindex(session_index)
+    cl = bar49["close"].reindex(session_index)
+    body_top = np.maximum(op.to_numpy(), cl.to_numpy())
+    range_ = (hi - lo).replace(0.0, np.nan)
+    upper_wick_49 = ((hi - body_top) / range_).fillna(0.0)
+
     # ------------------------------------------------------------------
     # CROSS-SESSION FEATURES (require training_stats)
     # ------------------------------------------------------------------
@@ -156,6 +177,8 @@ def make_features(
             "_const": 0.0,
             "fh_return": fh_return.to_numpy(),
             "yz_vol": yz_vol.to_numpy(),
+            "recent_return_3": recent_return_3.to_numpy(),
+            "upper_wick_49": upper_wick_49.to_numpy(),
         },
         index=session_index,
     )
