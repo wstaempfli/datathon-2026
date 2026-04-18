@@ -28,36 +28,6 @@ DEFAULT_PARAMS = {
 }
 
 
-def build_feature_matrix(
-    price_session: pd.DataFrame,
-    sent_session: pd.DataFrame | None,
-) -> pd.DataFrame:
-    """Merge per-session price + sentiment features on session index.
-
-    Returns a DataFrame indexed by session, NaN-filled with 0.0 (sentiment
-    missing for sessions with no headlines). Target columns are not included.
-    """
-    price = price_session.copy()
-    price.index.name = "session"
-
-    # Drop any target-like columns defensively.
-    drop_cols = [c for c in ("target_return", "target_position") if c in price.columns]
-    if drop_cols:
-        price = price.drop(columns=drop_cols)
-
-    if sent_session is None or len(sent_session) == 0:
-        X = price
-    else:
-        sent = sent_session.copy()
-        sent.index.name = "session"
-        # Left-join: keep every session present in price features.
-        X = price.join(sent, how="left")
-
-    X = X.sort_index()
-    X = X.replace([np.inf, -np.inf], np.nan).fillna(0.0)
-    return X
-
-
 def sharpe(pnl: np.ndarray) -> float:
     pnl = np.asarray(pnl, dtype=float)
     s = float(np.std(pnl))
