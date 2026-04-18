@@ -1,9 +1,8 @@
 """Per-session feature engineering for the Zurich Datathon 2026 challenge.
 
 This module is the single source of truth for the feature matrix consumed by
-`src/model.py`. It is intentionally minimal at the scaffolding stage — a single
-`_const` column keeps the end-to-end pipeline runnable while the researcher
-identifies signals worth turning into features.
+`src/model.py`. As of v10 it exposes 15 columns: 5 live price-derived features
+computed inline plus 10 Gate-1 PASS features joined from ``features/*.parquet``.
 
 Public surface:
     - make_features(bars_seen, headlines_seen, sentiment_cache, training_stats=None)
@@ -27,14 +26,41 @@ function can be called identically for train and test (test has no target).
 #   - vol_percentile     : fill 0.5 (median) for edge cases
 # NLP features           : fill 0.0 when sentiment cache has no coverage
 # INTERACTION features   : fill 0.0 (composed from already-filled inputs)
+# GATE-1 parquet features: fill 0.0 when a session is missing from the parquet
+#                          (e.g., sessions with no headlines for sentiment cols).
+#                          Source parquets are already produced by Phase 1 with
+#                          their own per-feature imputation; this fill handles
+#                          only the left-join miss case.
 #
 # Invariant: X.isna().sum().sum() == 0 before return.
 # --------------------------------------------------------------------------
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
+
+# Resolve features/ dir relative to this file so the pipeline works regardless
+# of CWD (matches scripts/sweep_tree.py's resolution).
+_FEATURES_DIR = Path(__file__).resolve().parent.parent / "features"
+
+# Gate-1 top-10 features by |pearson_r| (all-splits PASS), preserved in the
+# exact order declared in submissions/phase3a_features.txt so the production
+# pipeline produces bit-identical predictions vs the Phase 3A sweep.
+_GATE1_TOP10: tuple[str, ...] = (
+    "max_drawdown_fh",
+    "garman_klass_vol",
+    "rogers_satchell_vol",
+    "parkinson_vol",
+    "sent_sma10",
+    "sent_ema20",
+    "realized_skewness",
+    "sent_wt_decay20",
+    "rsi_14",
+    "embed_pca_recency_1",
+)
 
 # Substrings that would indicate a column leaks unseen/second-half information.
 _LEAK_SUBSTRINGS: tuple[str, ...] = (
@@ -78,6 +104,23 @@ def _yang_zhang_vol(bars_seen: pd.DataFrame) -> pd.Series:
     n = 49
     k = 0.34 / (1.34 + (n + 1) / (n - 1))
     return np.sqrt(v_o + k * v_c + (1 - k) * v_rs).rename("yz_vol")
+
+
+def _load_gate1_feature(name: str, session_index: pd.Index) -> pd.Series:
+    """Load a Gate-1 parquet column and align to ``session_index`` (0-fill misses).
+
+    The Phase 1 parquets live at ``features/<name>.parquet`` and cover all
+    21,000 sessions (train + public_test + private_test) with columns
+    ``[session, <name>, ...]``. We project to the requested split's sessions
+    and zero-fill any missing values — e.g., sentiment columns for sessions
+    that have no headlines at all. The source parquets are already imputed by
+    the Phase 1 producer; this handles the left-join miss case only.
+    """
+    path = _FEATURES_DIR / f"{name}.parquet"
+    df = pd.read_parquet(path, columns=["session", name])
+    s = df.set_index("session")[name].reindex(session_index)
+    s = s.replace([np.inf, -np.inf], np.nan).fillna(0.0).astype(float)
+    return s.rename(name)
 
 
 def make_features(
@@ -157,31 +200,43 @@ def make_features(
     # ------------------------------------------------------------------
     # CROSS-SESSION FEATURES (require training_stats)
     # ------------------------------------------------------------------
-    # TODO: add features that depend on the training distribution (deciles,
-    #       percentiles, historical bucket means). Fit in fit mode, apply in
-    #       apply mode. NEVER fit on test data.
+    # None currently. The Gate-1 parquet features below have no per-fold fit —
+    # embed_pca_recency_1 was fit once in Phase 1A and baked into the parquet;
+    # sentiment MAs are per-session aggregates with no global statistic.
 
     # ------------------------------------------------------------------
-    # NLP FEATURES (merged from headlines + sentiment_cache per session)
+    # GATE-1 FEATURES (top-10 by |pearson_r|, joined from features/*.parquet)
     # ------------------------------------------------------------------
-    # TODO: add sentiment aggregates (mean, std, count, extremes) and any
-    #       cleaning/deduplication.
+    # Column order is frozen in ``_GATE1_TOP10`` to match
+    # submissions/phase3a_features.txt, ensuring the integrated pipeline
+    # produces predictions bit-identical to Phase 3A's sweep output.
+    gate1_cols = {
+        name: _load_gate1_feature(name, session_index).to_numpy()
+        for name in _GATE1_TOP10
+    }
+
+    # ------------------------------------------------------------------
+    # NLP FEATURES (live aggregates from headlines + sentiment_cache)
+    # ------------------------------------------------------------------
+    # The Gate-1 parquets above already include the winning sentiment features
+    # (sent_sma10, sent_ema20, sent_wt_decay20). No additional live aggregates
+    # are pulled in here — they failed Gate 1 or are redundant.
 
     # ------------------------------------------------------------------
     # INTERACTION FEATURES (compositions of the above)
     # ------------------------------------------------------------------
-    # TODO: add interactions such as sentiment_x_invvol, sentiment_price_agree.
+    # None at v10. Phase 3C cross-product sweep found no interaction that beat
+    # the flat price5+gate1top10 set.
 
-    X = pd.DataFrame(
-        {
-            "_const": 0.0,
-            "fh_return": fh_return.to_numpy(),
-            "yz_vol": yz_vol.to_numpy(),
-            "recent_return_3": recent_return_3.to_numpy(),
-            "upper_wick_49": upper_wick_49.to_numpy(),
-        },
-        index=session_index,
-    )
+    data = {
+        "_const": np.zeros(len(session_index), dtype=float),
+        "fh_return": fh_return.to_numpy(),
+        "yz_vol": yz_vol.to_numpy(),
+        "recent_return_3": recent_return_3.to_numpy(),
+        "upper_wick_49": upper_wick_49.to_numpy(),
+    }
+    data.update(gate1_cols)
+    X = pd.DataFrame(data, index=session_index)
     feature_names: list[str] = list(X.columns)
 
     # Pass-through contract: apply mode returns the stats it was given so callers
