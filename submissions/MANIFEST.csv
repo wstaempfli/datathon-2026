@@ -3,3 +3,4 @@ filename,timestamp,model,loss,feature_set,feature_count,cv_sharpe,cv_sharpe_std,
 20260418T215107_ridge_price5_s281.csv,20260418T215107,ridge,l2,price5,5,2.805618,0.431907,0.020312,7070647,kenji/main-v2,dry-run smoke test — Ridge alpha=1
 20260418T220557_huber_price5+gate1top10_s256.csv,20260418T220557,huber,huber,price5+gate1top10,15,2.564396,0.564625,0.020543,7070647,kenji/main-v2,"HuberRegressor(epsilon=1.35, alpha=1e-4, max_iter=200) — baseline"
 20260418T220557_ridge_price5+gate1top10_s255.csv,20260418T220557,ridge,l2,price5+gate1top10,15,2.547756,0.569899,0.020510,4fa0d3f,kenji/main-v2,Ridge(alpha=0.1)
+20260418T220557_ridge_price5+gate1top10_s260.csv,20260418T220557,ridge,l2,price5+gate1top10,15,2.595926,0.568632,0.020493,2d6982c,kenji/main-v2,Ridge(alpha=1.0)
