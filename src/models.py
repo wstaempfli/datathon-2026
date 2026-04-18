@@ -7,8 +7,33 @@ from sklearn.preprocessing import StandardScaler
 from xgboost import XGBRegressor
 
 
-def train_xgboost(X: np.ndarray, y: np.ndarray, params: dict | None = None):
-    """Train XGBoost regressor with conservative defaults inside a StandardScaler pipeline."""
+def sharpe_objective(y_true: np.ndarray, y_pred: np.ndarray):
+    """Custom XGBoost objective: minimise negative Sharpe of pnl = pred * y_true.
+
+    Returns (grad, hess) per sample. Gradient is rescaled so split-gain clears
+    XGBoost's thresholds; constant Hessian (true Hessian is singular due to
+    Sharpe's scale-invariance — reg_lambda pins output scale).
+    """
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    n = len(y_pred)
+    pnl = y_pred * y_true
+    sigma = pnl.std()
+    if sigma < 1e-8:
+        return -y_true, np.ones_like(y_pred)
+    mu = pnl.mean()
+    grad = -(y_true / sigma) + (mu * y_true * (pnl - mu)) / (sigma**3)
+    hess = np.ones_like(y_pred)
+    return grad, hess
+
+
+def train_xgboost(
+    X: np.ndarray,
+    y: np.ndarray,
+    params: dict | None = None,
+    loss: str = "mse",
+):
+    """Train XGBoost regressor. loss={'mse','sharpe'}; 'sharpe' uses a custom objective."""
     defaults = dict(
         n_estimators=50,
         max_depth=3,
@@ -19,6 +44,11 @@ def train_xgboost(X: np.ndarray, y: np.ndarray, params: dict | None = None):
         reg_lambda=1.0,
         verbosity=0,
     )
+    if loss == "sharpe":
+        defaults["objective"] = sharpe_objective
+        defaults["base_score"] = 1e-3
+    elif loss != "mse":
+        raise ValueError(f"unknown loss: {loss}")
     if params is not None:
         defaults.update(params)
     return Pipeline([

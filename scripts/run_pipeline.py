@@ -32,6 +32,7 @@ def load_data() -> dict[str, pd.DataFrame]:
 def main():
     parser = argparse.ArgumentParser(description="Run the datathon pipeline end-to-end.")
     parser.add_argument("--name", default="submission", help="Submission file base name")
+    parser.add_argument("--loss", choices=["mse", "sharpe"], default="mse")
     args = parser.parse_args()
 
     data = load_data()
@@ -43,13 +44,14 @@ def main():
     feature_names = features.columns.tolist()
     y = get_target(bars_seen, bars_unseen).values
 
-    cv_results = cross_validate(X, y, train_xgboost, n_splits=5, n_seeds=20)
+    model_fn = lambda x, t: train_xgboost(x, t, loss=args.loss)
+    cv_results = cross_validate(X, y, model_fn, n_splits=5, n_seeds=20)
     print(
         f"CV Sharpe: {cv_results['sharpe_mean']:.4f} \u00b1 {cv_results['sharpe_std']:.4f} "
         f"(acc {cv_results['accuracy_mean']:.4f})"
     )
 
-    model = train_xgboost(X, y)
+    model = train_xgboost(X, y, loss=args.loss)
     imp = feature_importance(model, feature_names)
     print("Top features:")
     print(imp.head(5).to_string())
