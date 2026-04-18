@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>datathon-2026 · session viz</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">datathon-2026</div>
+
+      <label class="field">
+        <span class="label">split</span>
+        <select id="split"></select>
+      </label>
+
+      <button id="btn-prev" class="icon-btn" title="previous session (←)">◀</button>
+
+      <label class="field">
+        <span class="label">session</span>
+        <input id="session-id" type="number" min="0" step="1" inputmode="numeric" />
+      </label>
+
+      <button id="btn-next" class="icon-btn" title="next session (→)">▶</button>
+      <button id="btn-random" title="random session">random</button>
+
+      <div id="meta" class="meta"></div>
+
+      <div class="hotkeys">
+        <kbd>←</kbd><kbd>→</kbd> nav &nbsp;
+        <kbd>R</kbd> reload &nbsp;
+        <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> split
+      </div>
+    </header>
+
+    <main class="main">
+      <aside class="sidebar">
+        <section>
+          <h3>features</h3>
+          <div id="feature-list"></div>
+        </section>
+      </aside>
+
+      <section class="content">
+        <div id="chart"></div>
+        <div class="bottom">
+          <div class="headlines">
+            <h3>headlines <span id="headlines-count" class="muted"></span></h3>
+            <div id="headlines-list"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
