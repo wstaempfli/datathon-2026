@@ -7,3 +7,4 @@ filename,timestamp,model,loss,feature_set,feature_count,cv_sharpe,cv_sharpe_std,
 20260418T220558_ridge_price5+gate1top10_s267.csv,20260418T220558,ridge,l2,price5+gate1top10,15,2.672471,0.576844,0.020459,80c2fe4,kenji/main-v2,Ridge(alpha=10.0)
 20260418T220558_lasso_price5+gate1top10_s270.csv,20260418T220558,lasso,l1,price5+gate1top10,15,2.700610,0.663405,0.020421,1ef6575,kenji/main-v2,"Lasso(alpha=0.001, max_iter=10000)"
 20260418T220558_lasso_price5+gate1top10_s278.csv,20260418T220558,lasso,l1,price5+gate1top10,15,2.783797,0.585747,0.020430,40dea27,kenji/main-v2,"Lasso(alpha=0.01, max_iter=10000)"
+20260418T220558_lasso_price5+gate1top10_s278.csv,20260418T220558,lasso,l1,price5+gate1top10,15,2.783797,0.585747,0.020430,004ba78,kenji/main-v2,"Lasso(alpha=0.1, max_iter=10000)"
