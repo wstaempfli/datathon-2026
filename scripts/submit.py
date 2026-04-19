@@ -18,8 +18,8 @@ if str(ROOT) not in sys.path:
 from src.pipeline import load_bars, load_headlines, predict  # noqa: E402
 
 MSG = (
-    "rule_bmb_recent K=35 clip=[-2.0,2.0] W=0.25 tau=40 "
-    "(CV mean=3.044, min=1.982, LB=2.79633)"
+    "temp "
+    "...."
 )
 
 

@@ -89,7 +89,13 @@ def _bmb_recent(heads: pd.DataFrame, sessions: pd.Index, tau: float = 40.0) -> p
 
 
 def predict(bars: pd.DataFrame, heads: pd.DataFrame) -> pd.Series:
+    k = 24.0
+    w = 0.375
+    lo = -2.0
+    hi = 2.0
+    tau = 20.0
+
     fh = _fh_return(bars)
-    bmb = _bmb_recent(heads, fh.index, tau=40.0)
-    raw = 1.0 - 35.0 * fh.to_numpy() + 0.25 * bmb.to_numpy()
-    return pd.Series(np.clip(raw, -2.0, 2.0), index=fh.index, name="target_position")
+    bmb = _bmb_recent(heads, fh.index, tau=tau)
+    raw = 1.0 - k * fh.to_numpy() + w * bmb.to_numpy()
+    return pd.Series(np.clip(raw, lo, hi), index=fh.index, name="target_position")
