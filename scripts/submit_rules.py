@@ -1,10 +1,10 @@
-"""Generate (and optionally submit) the rule_bmbv2 CSV to Kaggle.
+"""Generate (and optionally submit) the rule_bmb_recent CSV to Kaggle.
 
 Usage:
     python scripts/submit_rules.py --dry-run    # write CSV + diagnostics, no submit
     python scripts/submit_rules.py              # write CSV + submit once
 
-Emits exactly one submission: rule_bmbv2 at K_FH=25, W_BMB=0.15 (public 2.70101).
+Emits exactly one submission: rule_bmb_recent (recency-weighted BMB, tau=40, W=0.25) — CV combined=2.758.
 """
 from __future__ import annotations
 
@@ -21,17 +21,17 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.data import compute_targets, load_bars, load_headlines  # noqa: E402
-from src.rules import rule_bmbv2  # noqa: E402
+from src.rules import rule_bmb_recent  # noqa: E402
 
 SUBMISSIONS_DIR = ROOT / "submissions"
 COMPETITION = "hrt-eth-zurich-datathon-2026"
 
 RULES = [
-    ("rule_bmbv2", "rule_bmbv2 K=25 W=0.15 (public 2.70101)"),
+    ("rule_bmb_recent", "rule_bmb_recent recency-decay tau=40 W=0.25 (CV combined=2.758)"),
 ]
 
 RULE_FNS = {
-    "rule_bmbv2": rule_bmbv2,
+    "rule_bmb_recent": rule_bmb_recent,
 }
 
 
