@@ -1,76 +1,95 @@
-"""End-to-end training and submission pipeline."""
-from __future__ import annotations
+"""Minimal self-contained pipeline reproducing rule_bmb_recent byte-for-byte.
 
-import sys
+Formula: clip(1 - 35 * fh_return + 0.25 * bmb_recent, -2.0, 2.0) with tau=40.
+"""
+
+import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+import numpy as np
+import pandas as pd
 
-import pandas as pd  # noqa: E402
+_BULL_PATTERNS: tuple[str, ...] = (
+    r"raises outlook",
+    r"reports strong demand",
+    r"reports \d+% increase in customer acquisition",
+    r"sees \d+% margin improvement",
+    r"announces \$[\d.]+b share buyback",
+    r"launches next-generation",
+    r"completes strategic acquisition",
+    r"announces breakthrough",
+    r"expands operations into",
+    r"opens new office in",
+    r"completes planned facility upgrade",
+    r"secures \$\d+m contract",
+    r"wins industry award",
+    r"files for regulatory approval",
+    r"announces significant capital expenditure",
+)
 
-from src.data import compute_targets, load_bars, load_headlines  # noqa: E402
-from src.features import make_features, validate_no_leakage  # noqa: E402
-from src.model import apply_sizing, fit_final, predict, train_cv, tune_k  # noqa: E402
+_BEAR_PATTERNS: tuple[str, ...] = (
+    r"warns of supply chain disruptions",
+    r"delays product launch",
+    r"misses quarterly revenue estimates",
+    r"sees \d+% drop in new customer orders",
+    r"reports \d+% decline in operating income",
+    r"reports unexpected decline",
+    r"faces regulatory review",
+    r"faces class action",
+    r"explores strategic alternatives",
+    r"loses key contract",
+    r"withdraws from .* market citing unfavorable",
+    r"recalls products",
+    r"reports rising costs pressuring margins",
+    r"steps down unexpectedly",
+    r"sees mixed results",
+    r"addresses investor concerns in open letter",
+    r"revises long-term strategy",
+)
 
-MODELS_DIR = ROOT / "models"
-SUBMISSIONS_DIR = ROOT / "submissions"
+_BULL_RE = re.compile("|".join(_BULL_PATTERNS), re.IGNORECASE)
+_BEAR_RE = re.compile("|".join(_BEAR_PATTERNS), re.IGNORECASE)
 
-
-def _build_X(split: str) -> pd.DataFrame:
-    bars = load_bars(split, seen=True)
-    heads = load_headlines(split, seen=True)
-    X, _ = make_features(bars, heads)
-    return X
-
-
-def run_pipeline() -> None:
-    """Train on the train split and write submissions/submission.csv."""
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    SUBMISSIONS_DIR.mkdir(parents=True, exist_ok=True)
-
-    X_train = _build_X("train")
-    y_train = compute_targets().set_index("session")["target_return"].loc[X_train.index]
-
-    validate_no_leakage(X_train)
-    print(f"X_train shape: {X_train.shape}  columns: {list(X_train.columns)}")
-
-    _models, oof, metrics = train_cv(X_train, y_train)
-    print({k: round(v, 4) for k, v in metrics.items() if isinstance(v, (int, float))})
-
-    best_k, k_diag = tune_k(oof, y_train.values.astype(float))
-    print("k sweep:")
-    for k_val, sh in sorted(k_diag.items()):
-        marker = "  <-- best" if k_val == best_k else ""
-        print(f"  k={k_val:>7.1f}  sharpe={sh:+.4f}{marker}")
-    print(f"selected k = {best_k}")
-
-    booster = fit_final(X_train, y_train)
-
-    parts: list[pd.DataFrame] = []
-    for split in ("public_test", "private_test"):
-        X_t = _build_X(split)
-        assert list(X_t.columns) == list(X_train.columns), (
-            f"Column mismatch on {split}: train={list(X_train.columns)} "
-            f"vs test={list(X_t.columns)}"
-        )
-        raw_preds = predict(booster, X_t)
-        positions = apply_sizing(raw_preds, best_k)
-        parts.append(pd.DataFrame(
-            {"session": X_t.index.astype(int), "target_position": positions}
-        ))
-        print(
-            f"split={split}  rows={len(positions)}  "
-            f"raw_mean={raw_preds.mean():+.5f} raw_std={raw_preds.std():.5f}  "
-            f"pos_mean={positions.mean():.4f} pos_std={positions.std():.4f}  "
-            f"pos_min={positions.min():.3f} pos_max={positions.max():.3f}"
-        )
-
-    out = SUBMISSIONS_DIR / "submission.csv"
-    pd.concat(parts, ignore_index=True).to_csv(out, index=False)
-    print(f"wrote {out}  rows={sum(len(p) for p in parts)}")
+_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 
-if __name__ == "__main__":
-    run_pipeline()
+def load_bars(split: str) -> pd.DataFrame:
+    return pd.read_parquet(_DATA_DIR / f"bars_seen_{split}.parquet")
+
+
+def load_headlines(split: str) -> pd.DataFrame:
+    return pd.read_parquet(_DATA_DIR / f"headlines_seen_{split}.parquet")
+
+
+def _fh_return(bars: pd.DataFrame) -> pd.Series:
+    sessions = pd.Index(np.sort(bars["session"].unique()), name="session")
+    close_pivot = (
+        bars.pivot(index="session", columns="bar_ix", values="close")
+        .reindex(index=sessions, columns=range(50))
+    )
+    c0 = close_pivot[0].replace(0.0, np.nan)
+    c49 = close_pivot[49]
+    return (c49 / c0 - 1.0).fillna(0.0)
+
+
+def _bmb_recent(heads: pd.DataFrame, sessions: pd.Index, tau: float = 40.0) -> pd.Series:
+    text = heads["headline"].astype(str)
+    is_bull = text.str.contains(_BULL_RE, regex=True, na=False)
+    is_bear = text.str.contains(_BEAR_RE, regex=True, na=False)
+    pol = (is_bull.astype(int) - (is_bear & ~is_bull).astype(int)).astype(float)
+    bar_ix = heads["bar_ix"].to_numpy().astype(float)
+    decay = np.exp(-(49.0 - bar_ix) / float(tau))
+    contrib = pol.to_numpy() * decay
+    agg = (
+        pd.DataFrame({"session": heads["session"].to_numpy(), "c": contrib})
+        .groupby("session")["c"]
+        .sum()
+    )
+    return agg.reindex(sessions, fill_value=0.0).astype(float)
+
+
+def predict(bars: pd.DataFrame, heads: pd.DataFrame) -> pd.Series:
+    fh = _fh_return(bars)
+    bmb = _bmb_recent(heads, fh.index, tau=40.0)
+    raw = 1.0 - 35.0 * fh.to_numpy() + 0.25 * bmb.to_numpy()
+    return pd.Series(np.clip(raw, -2.0, 2.0), index=fh.index, name="target_position")

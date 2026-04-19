@@ -210,9 +210,5 @@ __marimo__/
 .idea/
 
 # Project artifacts (regenerable)
-features/*
-!features/.gitkeep
-!features/sentiment_cache.parquet
-models/
-submissions/
+submissions/*.csv
 .pytest_cache/
