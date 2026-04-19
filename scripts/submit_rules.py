@@ -4,7 +4,7 @@ Usage:
     python scripts/submit_rules.py --dry-run    # write CSV + diagnostics, no submit
     python scripts/submit_rules.py              # write CSV + submit once
 
-Emits exactly one submission: rule_bmb_recent (recency-weighted BMB, tau=40, W=0.25) — CV combined=2.758.
+Emits exactly one submission: rule_bmb_recent (K=35, clip=[-2.0, 2.0], W=0.25, tau=40) — CV mean=3.044, min=1.982.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ SUBMISSIONS_DIR = ROOT / "submissions"
 COMPETITION = "hrt-eth-zurich-datathon-2026"
 
 RULES = [
-    ("rule_bmb_recent", "rule_bmb_recent recency-decay tau=40 W=0.25 (CV combined=2.758)"),
+    ("rule_bmb_recent", "rule_bmb_recent K=35 clip=[-2.0,2.0] W=0.25 tau=40 (CV mean=3.044, min=1.982; LB-selected from sweep_clip)"),
 ]
 
 RULE_FNS = {
@@ -70,7 +70,7 @@ def _validate(df: pd.DataFrame, rule_name: str) -> None:
     assert df["target_position"].isna().sum() == 0, f"{rule_name}: NaN in positions"
     lo = float(df["target_position"].min())
     hi = float(df["target_position"].max())
-    assert lo >= 0.2 - 1e-9, f"{rule_name}: pos_min={lo} < 0.2"
+    assert lo >= -2.0 - 1e-9, f"{rule_name}: pos_min={lo} < -2.0"
     assert hi <= 2.0 + 1e-9, f"{rule_name}: pos_max={hi} > 2.0"
 
 

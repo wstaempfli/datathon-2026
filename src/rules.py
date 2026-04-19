@@ -342,15 +342,16 @@ def rule_bmb_sent(bars: pd.DataFrame, heads: pd.DataFrame, sent=None) -> pd.Seri
 
 
 def rule_bmb_recent(bars: pd.DataFrame, heads: pd.DataFrame, sent=None) -> pd.Series:
-    """clip(1 - 25·fh_return + 0.25·bmb_recent) with tau=40.
+    """clip(1 - 35·fh_return + 0.25·bmb_recent, -2.0, 2.0) with tau=40.
 
-    Picked by train+holdout combined Sharpe (2.7580); the original recency sweep's
-    CV-best at tau=40, before any LB feedback.
+    Hard-coded to Phase 0 sweep_clip variant (lo=-2.0, hi=2.0, K=35, W=0.25, tau=40)
+    selected by LB diagnostic on submissions/sweep_clip_lon2p0_hi2p0_k35.csv.
+    CV: mean=3.044, min=1.982, std_fold=1.469.
     """
     X, _ = make_features(bars, heads, sentiment_cache=sent)
     bmb_recent = _bmb_recency_weighted(heads, X.index, tau=40.0)
-    raw = 1.0 - K_FH * X["fh_return"].to_numpy() + 0.25 * bmb_recent.to_numpy()
-    return pd.Series(_clip(raw), index=X.index, name="target_position")
+    raw = 1.0 - 35.0 * X["fh_return"].to_numpy() + 0.25 * bmb_recent.to_numpy()
+    return pd.Series(np.clip(raw, -2.0, 2.0), index=X.index, name="target_position")
 
 
 def rule_bmb_late(bars: pd.DataFrame, heads: pd.DataFrame, sent=None) -> pd.Series:
