@@ -1,0 +1,348 @@
+:root {
+  --fg: #0B1220;
+  --fg-soft: #334155;
+  --bg: #FFFFFF;
+  --bg-soft: #F6F8FB;
+  --accent: #2F6FEB;
+  --accent-soft: #DCE6FA;
+  --muted: #9AA3AF;
+  --grid: #E5E7EB;
+  --rail: #CBD5E1;
+  --pos: #16A34A;
+  --neg: #DC2626;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ----- Deck shell ----- */
+
+.deck {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg-soft);
+}
+
+.stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stage-inner {
+  width: 1920px;
+  height: 1080px;
+  transform-origin: center center;
+}
+
+/* Each slide canvas is a fixed 1920x1080 white card */
+.slide {
+  width: 1920px;
+  height: 1080px;
+  padding: 96px 128px;
+  background: var(--bg);
+  color: var(--fg);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+
+.slide-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 22px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 24px;
+}
+
+.slide-title {
+  font-size: 72px;
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  margin: 0 0 8px;
+}
+
+.slide-subtitle {
+  font-size: 32px;
+  font-weight: 500;
+  color: var(--fg-soft);
+  margin: 0 0 40px;
+}
+
+.slide-body {
+  flex: 1;
+  display: flex;
+  gap: 48px;
+  min-height: 0;
+}
+
+.slide-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.slide-footer {
+  position: absolute;
+  bottom: 40px;
+  left: 128px;
+  right: 128px;
+  display: flex;
+  justify-content: space-between;
+  font-size: 20px;
+  color: var(--muted);
+  letter-spacing: 0.05em;
+}
+
+/* ----- Screen nav ----- */
+
+.nav-indicator {
+  position: fixed;
+  bottom: 16px;
+  right: 24px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(11, 18, 32, 0.72);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  font-feature-settings: "tnum";
+  letter-spacing: 0.06em;
+  z-index: 100;
+}
+
+.hint {
+  position: fixed;
+  bottom: 16px;
+  left: 24px;
+  font-size: 13px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  z-index: 100;
+}
+
+/* ----- Typography helpers ----- */
+
+.bullets {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 28px;
+  line-height: 1.45;
+  color: var(--fg-soft);
+}
+.bullets li {
+  padding-left: 32px;
+  position: relative;
+  margin-bottom: 16px;
+}
+.bullets li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.72em;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.bullets strong { color: var(--fg); font-weight: 700; }
+
+.mono {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.accent { color: var(--accent); font-weight: 700; }
+.pos { color: var(--pos); font-weight: 700; }
+.neg { color: var(--neg); font-weight: 700; }
+
+/* ----- Slide 1 (Title) ----- */
+
+.title-slide {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.title-slide .kicker {
+  font-size: 22px;
+  letter-spacing: 0.36em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 32px;
+}
+.title-slide h1 {
+  font-size: 128px;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  line-height: 1.02;
+  margin: 0;
+}
+.title-slide h1 .dim { color: var(--muted); font-weight: 500; }
+.title-slide .team {
+  margin-top: 56px;
+  font-size: 40px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.title-slide .members {
+  margin-top: 12px;
+  font-size: 26px;
+  color: var(--fg-soft);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+.title-slide .badges {
+  margin-top: 64px;
+  display: flex;
+  gap: 24px;
+  justify-content: center;
+}
+.badge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px 32px;
+  background: var(--bg-soft);
+  border: 1px solid var(--grid);
+  border-radius: 16px;
+  min-width: 200px;
+}
+.badge .label {
+  font-size: 16px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.badge .value {
+  font-size: 44px;
+  font-weight: 700;
+  color: var(--accent);
+  font-feature-settings: "tnum";
+}
+
+/* ----- Formula block ----- */
+
+.formula {
+  background: var(--bg-soft);
+  border: 1px solid var(--grid);
+  border-left: 4px solid var(--accent);
+  border-radius: 12px;
+  padding: 24px 32px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 24px;
+  line-height: 1.7;
+  color: var(--fg);
+  white-space: pre;
+  overflow-x: auto;
+}
+.formula .hl { color: var(--accent); font-weight: 700; }
+
+/* ----- Stat cards ----- */
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  margin-bottom: 32px;
+}
+.stat {
+  background: var(--bg-soft);
+  border: 1px solid var(--grid);
+  border-radius: 16px;
+  padding: 24px 28px;
+}
+.stat .label {
+  font-size: 16px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.stat .value {
+  font-size: 40px;
+  font-weight: 700;
+  font-feature-settings: "tnum";
+  color: var(--fg);
+}
+.stat.blue .value { color: var(--accent); }
+
+/* ----- Chart wrapper ----- */
+
+.chart-card {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--grid);
+  border-radius: 16px;
+  padding: 24px 24px 32px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chart-card h3 {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0 0 12px;
+  color: var(--fg-soft);
+  letter-spacing: 0.02em;
+}
+.chart-card .chart-body {
+  flex: 1;
+  min-height: 0;
+}
+
+/* recharts overrides */
+.recharts-cartesian-axis-tick text,
+.recharts-legend-wrapper,
+.recharts-tooltip-wrapper {
+  font-size: 15px !important;
+}
+.recharts-cartesian-axis-tick text { fill: var(--fg-soft) !important; }
+
+/* ----- Print mode ----- */
+
+.print-stack { display: none; }
+
+@media print {
+  @page {
+    size: 1920px 1080px;
+    margin: 0;
+  }
+  html, body, #root { background: #fff; }
+  .deck { height: auto; overflow: visible; background: #fff; }
+  .stage { position: static; display: block; }
+  .stage-inner { display: none !important; }
+  .nav-indicator, .hint { display: none !important; }
+
+  .print-stack { display: block; }
+  .print-stack .slide {
+    page-break-after: always;
+    break-after: page;
+  }
+  .print-stack .slide:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+}

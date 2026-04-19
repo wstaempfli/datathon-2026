@@ -212,3 +212,8 @@ __marimo__/
 # Project artifacts (regenerable)
 submissions/*.csv
 .pytest_cache/
+
+# Presentation (Vite build outputs)
+presentation/node_modules/
+presentation/dist/
+presentation/.vite/
