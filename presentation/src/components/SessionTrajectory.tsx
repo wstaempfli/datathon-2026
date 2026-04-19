@@ -19,10 +19,6 @@ export function SessionTrajectory() {
 
   return (
     <div className="chart-card">
-      <h3>
-        Example session #{data.session} · first-half fh={(data.fh_return * 100).toFixed(2)}% · held
-        target={(data.target_return * 100).toFixed(2)}%
-      </h3>
       <div className="chart-body">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={series} margin={{ top: 16, right: 24, bottom: 24, left: 8 }}>

@@ -21,7 +21,6 @@ export function QuintileBar() {
 
   return (
     <div className="chart-card">
-      <h3>Mean target_return by fh quintile · fade the spike</h3>
       <div className="chart-body">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={bins} margin={{ top: 24, right: 24, bottom: 24, left: 16 }}>

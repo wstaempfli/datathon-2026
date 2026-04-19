@@ -1,5 +1,4 @@
 import { CvBar } from "../components/CvBar";
-import { Formula } from "../components/Formula";
 import { Slide } from "../components/Slide";
 
 export function Slide5Solution({ total }: { total: number }) {
@@ -7,35 +6,26 @@ export function Slide5Solution({ total }: { total: number }) {
     <Slide
       pageNum={5}
       total={total}
-      kicker="The Solution"
-      title="V1b · Drift-preserving risk-parity"
-      subtitle="Long the drift by default. Scale only the directional bet by realised volatility. News nudges the sign."
+      kicker="Results"
+      title="Drift-preserving wins."
+      subtitle="5-fold contiguous CV on train. V1b dominates on both mean and worst-fold."
     >
-      <div className="slide-body" style={{ flexDirection: "column", gap: 24 }}>
-        <Formula />
-        <div style={{ display: "flex", gap: 24, flex: 1, minHeight: 0 }}>
-          <div className="slide-col" style={{ flex: "0 0 640px" }}>
-            <ul className="bullets">
-              <li>
-                <strong>+1 intercept</strong> captures the 57% positive-drift prior — never scaled.
-              </li>
-              <li>
-                <strong>−24 · fh</strong> fades the first-half move; <strong>+0.375 · bmb</strong>{" "}
-                tilts by recent bull/bear headline polarity (τ = 20).
-              </li>
-              <li>
-                <strong>Risk parity</strong>: <span className="mono">scaler = σ_ref / σ</span>, clipped to
-                [0.5, 2.0]. Calm sessions bet bigger, spiky sessions bet smaller.
-              </li>
-              <li className="accent">
-                Strictly dominates the unscaled baseline on both CV mean (3.13 vs 3.12) and min (2.18 vs 2.02).
-              </li>
-            </ul>
-          </div>
-          <div className="slide-col">
-            <CvBar />
-          </div>
+      <div className="results-summary">
+        <div className="metric">
+          <span className="label">CV Mean</span>
+          <span className="value">3.13</span>
         </div>
+        <div className="metric">
+          <span className="label">CV Min</span>
+          <span className="value">2.18</span>
+        </div>
+        <div className="metric muted">
+          <span className="label">Public LB</span>
+          <span className="value">2.81</span>
+        </div>
+      </div>
+      <div className="plot-frame">
+        <CvBar />
       </div>
     </Slide>
   );

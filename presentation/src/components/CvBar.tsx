@@ -21,11 +21,6 @@ export function CvBar() {
 
   return (
     <div className="chart-card">
-      <h3>
-        5-fold contiguous CV Sharpe · V1b mean <span className="accent">{cv.v1b_mean.toFixed(2)}</span> /
-        min <span className="accent">{cv.v1b_min.toFixed(2)}</span> vs baseline {cv.baseline_mean.toFixed(2)} /{" "}
-        {cv.baseline_min.toFixed(2)}
-      </h3>
       <div className="chart-body">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={rows} margin={{ top: 24, right: 24, bottom: 24, left: 16 }}>

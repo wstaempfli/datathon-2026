@@ -18,7 +18,6 @@ export function ModelBar() {
 
   return (
     <div className="chart-card">
-      <h3>Kaggle public-LB Sharpe per approach · V1b in accent blue</h3>
       <div className="chart-body">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart

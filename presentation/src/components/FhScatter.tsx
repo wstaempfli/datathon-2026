@@ -16,7 +16,7 @@ type Pt = { fh: number; target: number };
 
 export function FhScatter() {
   const pts: Pt[] = scatter.points;
-  const { regression, corr } = scatter;
+  const { regression } = scatter;
   const line = [
     { fh: regression.x_min, target: regression.y_at_xmin, isLine: 1 },
     { fh: regression.x_max, target: regression.y_at_xmax, isLine: 1 },
@@ -24,9 +24,6 @@ export function FhScatter() {
 
   return (
     <div className="chart-card">
-      <h3>
-        fh_return (bar 0→49) vs target_return (bar 49→99) · corr = <span className="neg">{corr.toFixed(3)}</span>
-      </h3>
       <div className="chart-body">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart margin={{ top: 16, right: 24, bottom: 32, left: 16 }}>

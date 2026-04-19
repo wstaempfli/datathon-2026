@@ -1,12 +1,12 @@
 :root {
   --fg: #0B1220;
-  --fg-soft: #334155;
+  --fg-soft: #475569;
   --bg: #FFFFFF;
-  --bg-soft: #F6F8FB;
+  --bg-soft: #F8FAFC;
   --accent: #2F6FEB;
-  --accent-soft: #DCE6FA;
-  --muted: #9AA3AF;
-  --grid: #E5E7EB;
+  --accent-soft: #E8EFFB;
+  --muted: #94A3B8;
+  --grid: #EEF2F6;
   --rail: #CBD5E1;
   --pos: #16A34A;
   --neg: #DC2626;
@@ -19,7 +19,7 @@ html, body, #root {
   padding: 0;
   width: 100%;
   height: 100%;
-  background: var(--bg);
+  background: var(--bg-soft);
   color: var(--fg);
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   font-feature-settings: "cv11", "ss01";
@@ -54,7 +54,7 @@ html, body, #root {
 .slide {
   width: 1920px;
   height: 1080px;
-  padding: 96px 128px;
+  padding: 140px 180px 120px;
   background: var(--bg);
   color: var(--fg);
   display: flex;
@@ -67,26 +67,29 @@ html, body, #root {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  font-size: 22px;
-  letter-spacing: 0.12em;
+  font-size: 20px;
+  letter-spacing: 0.28em;
   text-transform: uppercase;
   color: var(--muted);
-  margin-bottom: 24px;
+  margin-bottom: 56px;
+  font-weight: 500;
 }
 
 .slide-title {
-  font-size: 72px;
-  font-weight: 800;
-  line-height: 1.05;
-  letter-spacing: -0.02em;
-  margin: 0 0 8px;
+  font-size: 96px;
+  font-weight: 700;
+  line-height: 1.04;
+  letter-spacing: -0.035em;
+  margin: 0 0 20px;
+  color: var(--fg);
 }
 
 .slide-subtitle {
   font-size: 32px;
-  font-weight: 500;
+  font-weight: 400;
   color: var(--fg-soft);
-  margin: 0 0 40px;
+  margin: 0 0 56px;
+  letter-spacing: -0.005em;
 }
 
 .slide-body {
@@ -104,79 +107,32 @@ html, body, #root {
   min-height: 0;
 }
 
-.slide-footer {
-  position: absolute;
-  bottom: 40px;
-  left: 128px;
-  right: 128px;
-  display: flex;
-  justify-content: space-between;
-  font-size: 20px;
-  color: var(--muted);
-  letter-spacing: 0.05em;
-}
-
 /* ----- Screen nav ----- */
 
 .nav-indicator {
   position: fixed;
-  bottom: 16px;
-  right: 24px;
+  bottom: 20px;
+  right: 28px;
   padding: 6px 14px;
   border-radius: 999px;
   background: rgba(11, 18, 32, 0.72);
   color: #fff;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   font-feature-settings: "tnum";
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   z-index: 100;
 }
 
 .hint {
   position: fixed;
-  bottom: 16px;
-  left: 24px;
-  font-size: 13px;
+  bottom: 20px;
+  left: 28px;
+  font-size: 12px;
   color: var(--muted);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   z-index: 100;
 }
-
-/* ----- Typography helpers ----- */
-
-.bullets {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  font-size: 28px;
-  line-height: 1.45;
-  color: var(--fg-soft);
-}
-.bullets li {
-  padding-left: 32px;
-  position: relative;
-  margin-bottom: 16px;
-}
-.bullets li::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0.72em;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--accent);
-}
-.bullets strong { color: var(--fg); font-weight: 700; }
-
-.mono {
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.accent { color: var(--accent); font-weight: 700; }
-.pos { color: var(--pos); font-weight: 700; }
-.neg { color: var(--neg); font-weight: 700; }
 
 /* ----- Slide 1 (Title) ----- */
 
@@ -184,129 +140,150 @@ html, body, #root {
   align-items: center;
   justify-content: center;
   text-align: center;
+  padding: 120px 180px;
 }
 .title-slide .kicker {
-  font-size: 22px;
-  letter-spacing: 0.36em;
+  font-size: 18px;
+  letter-spacing: 0.42em;
   text-transform: uppercase;
   color: var(--muted);
-  margin-bottom: 32px;
+  margin-bottom: 56px;
+  font-weight: 500;
 }
 .title-slide h1 {
-  font-size: 128px;
-  font-weight: 800;
-  letter-spacing: -0.035em;
-  line-height: 1.02;
+  font-size: 156px;
+  font-weight: 700;
+  letter-spacing: -0.045em;
+  line-height: 0.98;
   margin: 0;
 }
-.title-slide h1 .dim { color: var(--muted); font-weight: 500; }
+.title-slide h1 .dim {
+  color: var(--muted);
+  font-weight: 300;
+  display: block;
+  font-size: 96px;
+  margin-top: 16px;
+  letter-spacing: -0.03em;
+}
 .title-slide .team {
-  margin-top: 56px;
-  font-size: 40px;
+  margin-top: 88px;
+  font-size: 36px;
   font-weight: 600;
   color: var(--fg);
+  letter-spacing: -0.005em;
 }
 .title-slide .members {
-  margin-top: 12px;
-  font-size: 26px;
+  margin-top: 14px;
+  font-size: 22px;
   color: var(--fg-soft);
-  font-weight: 500;
-  letter-spacing: 0.01em;
+  font-weight: 400;
+  letter-spacing: 0.02em;
 }
-.title-slide .badges {
-  margin-top: 64px;
-  display: flex;
-  gap: 24px;
-  justify-content: center;
-}
-.badge {
-  display: flex;
+.title-slide .lb-mark {
+  margin-top: 80px;
+  display: inline-flex;
   flex-direction: column;
   align-items: center;
-  padding: 20px 32px;
-  background: var(--bg-soft);
-  border: 1px solid var(--grid);
-  border-radius: 16px;
-  min-width: 200px;
+  gap: 8px;
 }
-.badge .label {
-  font-size: 16px;
-  letter-spacing: 0.18em;
+.title-slide .lb-mark .label {
+  font-size: 14px;
+  letter-spacing: 0.32em;
   text-transform: uppercase;
   color: var(--muted);
-  margin-bottom: 8px;
+  font-weight: 500;
 }
-.badge .value {
-  font-size: 44px;
+.title-slide .lb-mark .value {
+  font-size: 72px;
   font-weight: 700;
   color: var(--accent);
   font-feature-settings: "tnum";
+  letter-spacing: -0.02em;
+  line-height: 1;
 }
 
-/* ----- Formula block ----- */
+/* ----- Plot-only slide ----- */
 
-.formula {
-  background: var(--bg-soft);
-  border: 1px solid var(--grid);
-  border-left: 4px solid var(--accent);
-  border-radius: 12px;
-  padding: 24px 32px;
-  font-family: "JetBrains Mono", ui-monospace, monospace;
-  font-size: 24px;
-  line-height: 1.7;
-  color: var(--fg);
-  white-space: pre;
-  overflow-x: auto;
+.plot-frame {
+  flex: 1;
+  min-height: 0;
+  display: flex;
 }
-.formula .hl { color: var(--accent); font-weight: 700; }
 
-/* ----- Stat cards ----- */
+/* ----- Formula slide ----- */
 
-.stats {
+.formula-grid {
+  flex: 1;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 24px;
-  margin-bottom: 32px;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 80px;
+  align-items: center;
+  min-height: 0;
 }
-.stat {
-  background: var(--bg-soft);
-  border: 1px solid var(--grid);
-  border-radius: 16px;
-  padding: 24px 28px;
-}
-.stat .label {
-  font-size: 16px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin-bottom: 8px;
-}
-.stat .value {
-  font-size: 40px;
-  font-weight: 700;
-  font-feature-settings: "tnum";
-  color: var(--fg);
-}
-.stat.blue .value { color: var(--accent); }
 
-/* ----- Chart wrapper ----- */
+.formula-main {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  align-items: flex-start;
+}
+
+.formula-main .katex-display {
+  margin: 0 !important;
+  text-align: left !important;
+}
+
+.formula-main .katex-display > .katex {
+  font-size: 1.5em;
+  text-align: left;
+}
+
+.annotations {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.annotations li {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 28px;
+  align-items: center;
+  padding: 16px 0;
+  border-top: 1px solid var(--grid);
+}
+.annotations li:first-child { border-top: none; }
+
+.annotation-term {
+  display: flex;
+  justify-content: flex-end;
+}
+.annotation-term .katex-display {
+  margin: 0 !important;
+}
+.annotation-term .katex-display > .katex {
+  font-size: 0.95em;
+  color: var(--accent);
+}
+.annotation-text {
+  font-size: 22px;
+  line-height: 1.35;
+  color: var(--fg-soft);
+  font-weight: 400;
+  letter-spacing: -0.005em;
+}
+
+/* ----- Chart wrapper (no caption now) ----- */
 
 .chart-card {
   flex: 1;
   background: var(--bg);
-  border: 1px solid var(--grid);
-  border-radius: 16px;
-  padding: 24px 24px 32px;
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-.chart-card h3 {
-  font-size: 20px;
-  font-weight: 600;
-  margin: 0 0 12px;
-  color: var(--fg-soft);
-  letter-spacing: 0.02em;
 }
 .chart-card .chart-body {
   flex: 1;
@@ -317,9 +294,53 @@ html, body, #root {
 .recharts-cartesian-axis-tick text,
 .recharts-legend-wrapper,
 .recharts-tooltip-wrapper {
-  font-size: 15px !important;
+  font-size: 16px !important;
 }
 .recharts-cartesian-axis-tick text { fill: var(--fg-soft) !important; }
+
+/* ----- Stat inline (subtle) ----- */
+
+.stat-inline {
+  font-size: 32px;
+  font-weight: 600;
+  color: var(--fg);
+  letter-spacing: -0.01em;
+  font-feature-settings: "tnum";
+}
+.stat-inline .accent { color: var(--accent); }
+
+.results-summary {
+  display: flex;
+  gap: 80px;
+  margin-bottom: 40px;
+  align-items: baseline;
+}
+.results-summary .metric {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.results-summary .metric .label {
+  font-size: 14px;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 500;
+}
+.results-summary .metric .value {
+  font-size: 64px;
+  font-weight: 700;
+  color: var(--accent);
+  font-feature-settings: "tnum";
+  letter-spacing: -0.025em;
+  line-height: 1;
+}
+.results-summary .metric.muted .value { color: var(--fg); }
+
+.accent { color: var(--accent); font-weight: 600; }
+.pos { color: var(--pos); font-weight: 600; }
+.neg { color: var(--neg); font-weight: 600; }
+.mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
 
 /* ----- Print mode ----- */
 
